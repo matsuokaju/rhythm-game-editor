@@ -1,6 +1,11 @@
 <template>
   <div class="timeline-editor">
-    <div class="timeline-container" ref="timelineContainer">
+    <div class="timeline-container" 
+         ref="timelineContainer"
+         @mousedown="handleMouseDown"
+         @mousemove="handleMouseMove"
+         @mouseup="handleMouseUp"
+         @mouseleave="handleMouseUp">
       <div class="timeline-grid" :style="{ height: `${totalHeight}px` }">
         <!-- レーン背景 -->
         <div
@@ -26,6 +31,7 @@
 
         <!-- ノート表示 -->
         <div class="notes">
+          <!-- 実際のノート -->
           <div
             v-for="(note, index) in visibleNotes"
             :key="`note-${index}`"
@@ -33,8 +39,19 @@
             :class="`note-${note.type}`"
             :style="getNoteStyle(note)"
             @click="selectNote(index)"
+            @contextmenu.prevent="deleteNote(index)"
           >
-            <div v-if="note.type === 'hold'" class="hold-tail" :style="getHoldTailStyle(note)"></div>
+            <div v-if="note.type === 'hold'" class="hold-tail" :style="getHoldTailStyle()"></div>
+          </div>
+          
+          <!-- プレビューノート -->
+          <div
+            v-if="previewNote"
+            class="note note-preview"
+            :class="`note-${previewNote.type}`"
+            :style="getNoteStyle(previewNote)"
+          >
+            <div v-if="previewNote.type === 'hold'" class="hold-tail" :style="getHoldTailStyle()"></div>
           </div>
         </div>
       </div>
@@ -65,7 +82,7 @@ const timelineContainer = ref<HTMLElement>()
 
 // 表示設定
 const laneWidth = 80
-const beatHeight = ref(60)
+const beatHeight = ref(120) // 60から120に変更（2倍）
 const zoom = ref(1)
 const scrollTop = ref(0)
 
@@ -90,7 +107,7 @@ const totalHeight = computed(() => {
   return height
 })
 
-// 小節・ビート線のデータを生成
+// 小節・ビート線のデータを生成（下から上に流れるように反転）
 const timingLines = computed(() => {
   const lines: Array<{ measure: number; beat: number; y: number }> = []
   let currentY = 0
@@ -107,14 +124,14 @@ const timingLines = computed(() => {
     const beatHeightInMeasure = measureHeight / timeSignature[0]
     
     // 小節線
-    lines.push({ measure, beat: 0, y: currentY })
+    lines.push({ measure, beat: 0, y: totalHeight.value - currentY })
     
     // ビート線
     for (let beat = 1; beat < timeSignature[0]; beat++) {
       lines.push({ 
         measure, 
         beat, 
-        y: currentY + beat * beatHeightInMeasure 
+        y: totalHeight.value - (currentY + beat * beatHeightInMeasure)
       })
     }
     
@@ -124,7 +141,7 @@ const timingLines = computed(() => {
   return lines
 })
 
-// 表示範囲の小節を計算
+// 表示範囲の小節を計算（下から上に流れる表示に対応）
 const visibleMeasureRange = computed(() => {
   const containerHeight = timelineContainer.value?.clientHeight || 600
   let currentY = 0
@@ -137,14 +154,18 @@ const visibleMeasureRange = computed(() => {
     ...chartStore.notes.map(note => note.measure)
   )
   
+  // スクロール位置を下から上の座標系に変換
+  const scrollFromBottom = totalHeight.value - scrollTop.value - containerHeight
+  const scrollTopFromBottom = totalHeight.value - scrollTop.value
+  
   for (let measure = 1; measure <= maxMeasure; measure++) {
     const measureHeight = getMeasureHeight(measure)
     
-    if (currentY + measureHeight >= scrollTop.value && start === 1) {
+    if (currentY + measureHeight >= scrollFromBottom && start === 1) {
       start = measure
     }
     
-    if (currentY <= scrollTop.value + containerHeight) {
+    if (currentY <= scrollTopFromBottom) {
       end = measure
     }
     
@@ -167,37 +188,39 @@ const getNoteStyle = (note: Note) => {
   const y = getNoteY(note.measure, note.beat)
   const x = note.lane * laneWidth + 5
   
+  // ホールドノートの場合は高さを変更
+  if (note.type === 'hold' && note.duration) {
+    const endY = getNoteY(note.measure, note.beat + note.duration)
+    const height = Math.abs(y - endY) + 15 // ノートの高さを含める
+    
+    return {
+      position: 'absolute' as const,
+      left: `${x}px`,
+      top: `${Math.min(y, endY) - 7.5}px`, // より上の位置から開始
+      width: `${laneWidth - 10}px`,
+      height: `${height}px`,
+      zIndex: 10
+    }
+  }
+  
+  // タップノートの場合はそのまま
   return {
     position: 'absolute' as const,
     left: `${x}px`,
     top: `${y}px`,
     width: `${laneWidth - 10}px`,
-    height: '20px',
+    height: '15px',
     zIndex: 10
   }
 }
 
-// ホールドノートの尻尾のスタイル
-const getHoldTailStyle = (note: Note) => {
-  if (note.type !== 'hold' || !note.duration) return {}
-  
-  const startY = getNoteY(note.measure, note.beat)
-  const endY = getNoteY(note.measure, note.beat + note.duration)
-  const height = endY - startY
-  
-  return {
-    position: 'absolute' as const,
-    top: '20px',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    width: '4px',
-    height: `${height - 20}px`,
-    backgroundColor: '#4CAF50',
-    zIndex: 5
-  }
+// ホールドノートの尻尾のスタイル（新しいデザインでは使用しない）
+const getHoldTailStyle = () => {
+  // 新しいデザインでは尻尾は表示しない
+  return { display: 'none' }
 }
 
-// 小節・拍からY座標を計算
+// 小節・拍からY座標を計算（下から上に流れるように反転、ノート中央が拍位置に来るよう調整）
 const getNoteY = (measure: number, beat: number) => {
   let y = 0
   
@@ -212,7 +235,9 @@ const getNoteY = (measure: number, beat: number) => {
   const beatHeightInMeasure = measureHeight / timeSignature[0]
   y += beat * beatHeightInMeasure
   
-  return y
+  // 下から上に流れるように反転（総高さから引く）
+  // ノートの中央が拍位置に来るように、ノートの高さの半分（7.5px）を引く
+  return totalHeight.value - y - 7.5
 }
 
 // ズーム機能
@@ -229,6 +254,149 @@ const selectNote = (index: number) => {
   console.log('Selected note:', chartStore.notes[index])
 }
 
+// ノート削除
+const deleteNote = (index: number) => {
+  // visibleNotesのインデックスから実際のnotesの中のインデックスを見つける
+  const noteToDelete = visibleNotes.value[index]
+  const actualIndex = chartStore.notes.findIndex(note => 
+    note.measure === noteToDelete.measure &&
+    note.beat === noteToDelete.beat &&
+    note.lane === noteToDelete.lane &&
+    note.type === noteToDelete.type
+  )
+  
+  if (actualIndex !== -1) {
+    chartStore.removeNote(actualIndex)
+  }
+}
+
+// ドラッグ状態管理
+const isDragging = ref(false)
+const dragStartTime = ref(0)
+const dragStartPosition = ref<{ measure: number; beat: number; lane: number } | null>(null)
+const previewNote = ref<Note | null>(null)
+
+// マウス座標から小節・拍・レーンを計算（改良版）
+const getPositionFromMouseEvent = (event: MouseEvent) => {
+  if (!timelineContainer.value) return null
+  
+  const rect = timelineContainer.value.getBoundingClientRect()
+  const y = event.clientY - rect.top + scrollTop.value
+  
+  // レーンを計算（タイムライングリッドは中央寄せ）
+  const gridRect = timelineContainer.value.querySelector('.timeline-grid')?.getBoundingClientRect()
+  if (!gridRect) return null
+  
+  const relativeX = event.clientX - gridRect.left
+  const lane = Math.floor(relativeX / laneWidth)
+  
+  // レーン範囲外の場合は無視
+  if (lane < 0 || lane >= 6) return null
+  
+  // 下から上の座標系に変換
+  const adjustedY = totalHeight.value - y // 単純に反転するだけ
+  
+  let currentY = 0
+  const maxMeasure = Math.max(
+    10,
+    ...chartStore.timingPoints.map(tp => tp.measure),
+    ...chartStore.notes.map(note => note.measure)
+  )
+  
+  for (let measure = 1; measure <= maxMeasure; measure++) {
+    const measureHeight = getMeasureHeight(measure)
+    
+    if (adjustedY >= currentY && adjustedY < currentY + measureHeight) {
+      const timeSignature = chartStore.getTimeSignatureAt(measure, 0)
+      const positionInMeasure = adjustedY - currentY
+      const beat = (positionInMeasure / measureHeight) * timeSignature[0]
+      
+      // 1/4拍単位にスナップ
+      const snappedBeat = Math.round(beat * 4) / 4
+      
+      return { measure, beat: Math.max(0, snappedBeat), lane }
+    }
+    
+    currentY += measureHeight
+  }
+  
+  return null
+}
+
+// 新しいイベントハンドラー
+const handleMouseDown = (event: MouseEvent) => {
+  console.log('Mouse down detected')
+  
+  // ノートクリックの場合は処理しない
+  if ((event.target as HTMLElement).classList.contains('note')) {
+    return
+  }
+  
+  const position = getPositionFromMouseEvent(event)
+  console.log('Position from mouse:', position)
+  
+  if (!position) return
+  
+  isDragging.value = true
+  dragStartTime.value = Date.now()
+  dragStartPosition.value = position
+  previewNote.value = {
+    measure: position.measure,
+    beat: position.beat,
+    lane: position.lane,
+    type: 'tap'
+  }
+  
+  console.log('Started drag at:', position)
+}
+
+const handleMouseMove = (event: MouseEvent) => {
+  if (!isDragging.value || !dragStartPosition.value) return
+  
+  const currentPosition = getPositionFromMouseEvent(event)
+  if (!currentPosition) return
+  
+  console.log('Mouse move:', currentPosition)
+  
+  // ドラッグ時間が200ms以上の場合はホールドノート
+  const dragDuration = Date.now() - dragStartTime.value
+  if (dragDuration > 200) {
+    const startPos = dragStartPosition.value
+    const duration = Math.abs(
+      (currentPosition.measure - startPos.measure) * 4 + 
+      (currentPosition.beat - startPos.beat)
+    )
+    
+    previewNote.value = {
+      measure: startPos.measure,
+      beat: startPos.beat,
+      lane: startPos.lane,
+      type: 'hold',
+      duration: Math.max(0.25, duration)
+    }
+  }
+}
+
+const handleMouseUp = () => {
+  console.log('Mouse up detected')
+  
+  if (!isDragging.value || !previewNote.value) {
+    isDragging.value = false
+    dragStartPosition.value = null
+    previewNote.value = null
+    return
+  }
+  
+  // ノートを追加
+  chartStore.addNote(previewNote.value)
+  console.log('Added note:', previewNote.value)
+  
+  // 状態をリセット
+  isDragging.value = false
+  dragStartPosition.value = null
+  previewNote.value = null
+}
+
 // スクロール監視
 const handleScroll = () => {
   if (timelineContainer.value) {
@@ -239,6 +407,12 @@ const handleScroll = () => {
 onMounted(() => {
   if (timelineContainer.value) {
     timelineContainer.value.addEventListener('scroll', handleScroll)
+    // 初期位置を最下部（小節1が見える位置）に設定
+    setTimeout(() => {
+      if (timelineContainer.value) {
+        timelineContainer.value.scrollTop = timelineContainer.value.scrollHeight - timelineContainer.value.clientHeight
+      }
+    }, 100)
   }
 })
 
@@ -279,6 +453,9 @@ onUnmounted(() => {
   height: 100%;
   background: rgba(255, 255, 255, 0.05);
   border-right: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: crosshair;
+  user-select: none;
+  z-index: 1;
 }
 
 .lane-odd {
@@ -347,8 +524,15 @@ onUnmounted(() => {
 }
 
 .note-hold {
-  background: linear-gradient(45deg, #4ECDC4, #26D0CE);
+  background: linear-gradient(to bottom, #4ECDC4, #26D0CE, #4ECDC4);
   border: 2px solid #00CEC9;
+  border-radius: 6px;
+  opacity: 0.9;
+}
+
+.note-preview {
+  opacity: 0.6;
+  border-style: dashed !important;
 }
 
 .hold-tail {
