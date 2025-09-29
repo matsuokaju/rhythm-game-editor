@@ -191,12 +191,16 @@ const getNoteStyle = (note: Note) => {
   // ホールドノートの場合は高さを変更
   if (note.type === 'hold' && note.duration) {
     const endY = getNoteY(note.measure, note.beat + note.duration)
-    const height = Math.abs(y - endY) + 15 // ノートの高さを含める
+    
+    // 開始位置と終了位置の上の方をtopとし、下の方までの距離を高さとする
+    const topY = Math.min(y, endY)
+    const bottomY = Math.max(y, endY)
+    const height = bottomY - topY + 15 // ノートの厚み分を追加
     
     return {
       position: 'absolute' as const,
       left: `${x}px`,
-      top: `${Math.min(y, endY) - 7.5}px`, // より上の位置から開始
+      top: `${topY}px`, // より上の位置から開始
       width: `${laneWidth - 10}px`,
       height: `${height}px`,
       zIndex: 10
@@ -362,17 +366,30 @@ const handleMouseMove = (event: MouseEvent) => {
   const dragDuration = Date.now() - dragStartTime.value
   if (dragDuration > 200) {
     const startPos = dragStartPosition.value
-    const duration = Math.abs(
-      (currentPosition.measure - startPos.measure) * 4 + 
-      (currentPosition.beat - startPos.beat)
-    )
     
-    previewNote.value = {
-      measure: startPos.measure,
-      beat: startPos.beat,
-      lane: startPos.lane,
-      type: 'hold',
-      duration: Math.max(0.25, duration)
+    // 開始位置と終了位置を計算（絶対的な拍位置で計算）
+    const startAbsoluteBeat = (startPos.measure - 1) * 4 + startPos.beat
+    const endAbsoluteBeat = (currentPosition.measure - 1) * 4 + currentPosition.beat
+    
+    // 上向きにドラッグした場合（終了位置の方が小さい場合）
+    if (endAbsoluteBeat < startAbsoluteBeat) {
+      // 終了位置を開始位置として使用
+      previewNote.value = {
+        measure: currentPosition.measure,
+        beat: currentPosition.beat,
+        lane: currentPosition.lane,
+        type: 'hold',
+        duration: Math.max(0.25, startAbsoluteBeat - endAbsoluteBeat)
+      }
+    } else {
+      // 下向きにドラッグした場合（通常通り）
+      previewNote.value = {
+        measure: startPos.measure,
+        beat: startPos.beat,
+        lane: startPos.lane,
+        type: 'hold',
+        duration: Math.max(0.25, endAbsoluteBeat - startAbsoluteBeat)
+      }
     }
   }
 }
@@ -511,23 +528,25 @@ onUnmounted(() => {
 .note {
   border-radius: 3px;
   cursor: pointer;
-  transition: transform 0.1s;
+  transition: background-color 0.2s, border-color 0.2s;
+  background: #ffffff;
+  border: 2px solid #cccccc;
 }
 
 .note:hover {
-  transform: scale(1.05);
-}
-
-.note-tap {
-  background: linear-gradient(45deg, #FF6B6B, #FF8E8E);
-  border: 2px solid #FF4757;
+  background: #ffeb3b;
+  border-color: #ffc107;
 }
 
 .note-hold {
-  background: linear-gradient(to bottom, #4ECDC4, #26D0CE, #4ECDC4);
-  border: 2px solid #00CEC9;
   border-radius: 6px;
   opacity: 0.9;
+  /* 基本の白色スタイルを継承 */
+}
+
+.note-hold:hover {
+  background: linear-gradient(to bottom, #ffeb3b, #ffc107, #ffeb3b);
+  border-color: #ff9800;
 }
 
 .note-preview {
