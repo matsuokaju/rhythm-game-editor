@@ -1,5 +1,59 @@
 <template>
   <div class="timeline-editor">
+    <!-- コントロールパネル（左側） -->
+    <div class="control-panel">
+      <div class="mode-controls">
+        <h3>モード</h3>
+        <button 
+          @click="setMode('select')" 
+          :class="{ active: currentMode === 'select' }">
+          選択
+        </button>
+        <button 
+          @click="setMode('edit')" 
+          :class="{ active: currentMode === 'edit' }">
+          編集
+        </button>
+        <button 
+          @click="setMode('delete')" 
+          :class="{ active: currentMode === 'delete' }">
+          削除
+        </button>
+        <div class="mode-info">{{ getModeDescription() }}</div>
+      </div>
+      
+      <div class="zoom-controls">
+        <h3>ズーム</h3>
+        <div class="zoom-slider-container">
+          <span class="zoom-value">{{ Math.round(zoom * 100) }}%</span>
+          <input 
+            type="range" 
+            min="50" 
+            max="200" 
+            step="10" 
+            :value="Math.round(zoom * 100)" 
+            @input="handleZoomChange"
+            class="zoom-slider"
+          />
+          <div class="zoom-labels">
+            <span>50%</span>
+            <span>200%</span>
+          </div>
+        </div>
+      </div>
+      
+      <div class="info-section">
+        <h3>情報</h3>
+        <div class="measure-info">
+          <div>表示範囲:</div>
+          <div>{{ visibleMeasureRange.start }} - {{ visibleMeasureRange.end }}</div>
+        </div>
+        <div v-if="selectedNotes.size > 0" class="selected-info">
+          選択中: {{ selectedNotes.size }}個
+        </div>
+      </div>
+    </div>
+
     <div class="timeline-container" 
          ref="timelineContainer"
          @mousedown="handleMouseDown"
@@ -36,10 +90,9 @@
             v-for="(note, index) in visibleNotes"
             :key="`note-${index}`"
             class="note"
-            :class="`note-${note.type}`"
+            :class="[`note-${note.type}`, { selected: isNoteSelected(index) }]"
             :style="getNoteStyle(note)"
-            @click="selectNote(index)"
-            @contextmenu.prevent="deleteNote(index)"
+            @click="handleNoteClick($event, index)"
           >
             <div v-if="note.type === 'hold'" class="hold-tail" :style="getHoldTailStyle()"></div>
           </div>
@@ -54,18 +107,6 @@
             <div v-if="previewNote.type === 'hold'" class="hold-tail" :style="getHoldTailStyle()"></div>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- コントロールパネル -->
-    <div class="control-panel">
-      <div class="zoom-controls">
-        <button @click="zoomIn">拡大</button>
-        <button @click="zoomOut">縮小</button>
-        <span>{{ Math.round(zoom * 100) }}%</span>
-      </div>
-      <div class="measure-info">
-        <span>表示範囲: {{ visibleMeasureRange.start }} - {{ visibleMeasureRange.end }}</span>
       </div>
     </div>
   </div>
@@ -83,7 +124,7 @@ const timelineContainer = ref<HTMLElement>()
 // 表示設定
 const laneWidth = 80
 const beatHeight = ref(120) // 60から120に変更（2倍）
-const zoom = ref(1)
+const zoom = ref(1) // 100%（50%～200%の範囲）
 const scrollTop = ref(0)
 
 // 表示される小節の高さを計算
@@ -244,22 +285,90 @@ const getNoteY = (measure: number, beat: number) => {
   return totalHeight.value - y - 7.5
 }
 
+// モード管理
+const setMode = (mode: EditorMode) => {
+  currentMode.value = mode
+  // モード変更時に選択をクリア
+  if (mode !== 'select') {
+    selectedNotes.value.clear()
+  }
+}
+
+const getModeDescription = () => {
+  switch (currentMode.value) {
+    case 'select':
+      return 'ノートを選択 (Ctrl+クリックで複数選択)'
+    case 'edit':
+      return 'クリック/ドラッグでノート配置'
+    case 'delete':
+      return 'クリックでノート削除'
+    default:
+      return ''
+  }
+}
+
 // ズーム機能
-const zoomIn = () => {
-  zoom.value = Math.min(3, zoom.value * 1.2)
+const handleZoomChange = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  zoom.value = parseInt(target.value) / 100
 }
 
-const zoomOut = () => {
-  zoom.value = Math.max(0.3, zoom.value * 0.8)
+// 選択状態の判定
+const isNoteSelected = (visibleIndex: number) => {
+  const noteToCheck = visibleNotes.value[visibleIndex]
+  const actualIndex = chartStore.notes.findIndex(note => 
+    note.measure === noteToCheck.measure &&
+    note.beat === noteToCheck.beat &&
+    note.lane === noteToCheck.lane &&
+    note.type === noteToCheck.type
+  )
+  return actualIndex !== -1 && selectedNotes.value.has(actualIndex)
 }
 
-// ノート選択
-const selectNote = (index: number) => {
-  console.log('Selected note:', chartStore.notes[index])
+// ノートクリック処理（モードに応じて動作を変更）
+const handleNoteClick = (event: MouseEvent, index: number) => {
+  event.stopPropagation() // バブリングを防ぐ
+  
+  switch (currentMode.value) {
+    case 'select':
+      handleNoteSelect(event, index)
+      break
+    case 'delete':
+      handleNoteDelete(index)
+      break
+    // editモードの場合は何もしない（背景クリックで新規作成）
+  }
 }
 
-// ノート削除
-const deleteNote = (index: number) => {
+// ノート選択処理
+const handleNoteSelect = (event: MouseEvent, index: number) => {
+  // visibleNotesのインデックスから実際のnotesの中のインデックスを見つける
+  const noteToSelect = visibleNotes.value[index]
+  const actualIndex = chartStore.notes.findIndex(note => 
+    note.measure === noteToSelect.measure &&
+    note.beat === noteToSelect.beat &&
+    note.lane === noteToSelect.lane &&
+    note.type === noteToSelect.type
+  )
+  
+  if (actualIndex !== -1) {
+    if (event.ctrlKey || event.metaKey) {
+      // Ctrl+クリックで複数選択
+      if (selectedNotes.value.has(actualIndex)) {
+        selectedNotes.value.delete(actualIndex)
+      } else {
+        selectedNotes.value.add(actualIndex)
+      }
+    } else {
+      // 単一選択
+      selectedNotes.value.clear()
+      selectedNotes.value.add(actualIndex)
+    }
+  }
+}
+
+// ノート削除処理
+const handleNoteDelete = (index: number) => {
   // visibleNotesのインデックスから実際のnotesの中のインデックスを見つける
   const noteToDelete = visibleNotes.value[index]
   const actualIndex = chartStore.notes.findIndex(note => 
@@ -271,8 +380,15 @@ const deleteNote = (index: number) => {
   
   if (actualIndex !== -1) {
     chartStore.removeNote(actualIndex)
+    // 選択リストからも削除
+    selectedNotes.value.delete(actualIndex)
   }
 }
+
+// モード管理
+type EditorMode = 'select' | 'edit' | 'delete'
+const currentMode = ref<EditorMode>('edit')
+const selectedNotes = ref<Set<number>>(new Set())
 
 // ドラッグ状態管理
 const isDragging = ref(false)
@@ -336,6 +452,15 @@ const handleMouseDown = (event: MouseEvent) => {
     return
   }
   
+  // 編集モード以外では新規ノート作成しない
+  if (currentMode.value !== 'edit') {
+    // 選択モードで背景クリックした場合は全選択解除
+    if (currentMode.value === 'select') {
+      selectedNotes.value.clear()
+    }
+    return
+  }
+  
   const position = getPositionFromMouseEvent(event)
   console.log('Position from mouse:', position)
   
@@ -355,7 +480,7 @@ const handleMouseDown = (event: MouseEvent) => {
 }
 
 const handleMouseMove = (event: MouseEvent) => {
-  if (!isDragging.value || !dragStartPosition.value) return
+  if (!isDragging.value || !dragStartPosition.value || currentMode.value !== 'edit') return
   
   const currentPosition = getPositionFromMouseEvent(event)
   if (!currentPosition) return
@@ -397,7 +522,7 @@ const handleMouseMove = (event: MouseEvent) => {
 const handleMouseUp = () => {
   console.log('Mouse up detected')
   
-  if (!isDragging.value || !previewNote.value) {
+  if (!isDragging.value || !previewNote.value || currentMode.value !== 'edit') {
     isDragging.value = false
     dragStartPosition.value = null
     previewNote.value = null
@@ -443,8 +568,8 @@ onUnmounted(() => {
 <style scoped>
 .timeline-editor {
   display: flex;
-  flex-direction: column;
-  height: 100vh;
+  flex-direction: row;
+  height: calc(100vh - 60px); /* Vue DevToolsやその他の要素のためのスペースを確保 */
   background: #1a1a1a;
   color: #fff;
 }
@@ -455,6 +580,7 @@ onUnmounted(() => {
   overflow-x: hidden;
   position: relative;
   background: #2a2a2a;
+  padding-bottom: 40px; /* 最下部のノートが確実に表示されるためのパディング */
 }
 
 .timeline-grid {
@@ -559,37 +685,215 @@ onUnmounted(() => {
   border-radius: 2px;
 }
 
-/* コントロールパネル */
+/* 選択されたノート */
+.note.selected {
+  background: #ffeb3b !important;
+  border-color: #ff9800 !important;
+  box-shadow: 0 0 8px rgba(255, 235, 59, 0.8);
+}
+
+/* コントロールパネル（左側） */
 .control-panel {
   background: #333;
-  padding: 10px;
+  padding: 20px;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-top: 1px solid #555;
+  flex-direction: column;
+  gap: 30px;
+  border-right: 1px solid #555;
+  flex-shrink: 0;
+  width: 250px;
+  overflow-y: auto;
+}
+
+.control-panel h3 {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  color: #fff;
+  border-bottom: 1px solid #555;
+  padding-bottom: 5px;
+}
+
+.mode-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mode-controls button {
+  background: #555;
+  color: #fff;
+  border: none;
+  padding: 12px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  width: 100%;
+}
+
+.mode-controls button:hover {
+  background: #666;
+}
+
+.mode-controls button.active {
+  background: #4CAF50;
+  box-shadow: 0 2px 4px rgba(76, 175, 80, 0.3);
+}
+
+.mode-info {
+  font-size: 12px;
+  color: #aaa;
+  margin-top: 10px;
+  line-height: 1.4;
 }
 
 .zoom-controls {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 10px;
 }
 
-.zoom-controls button {
-  background: #555;
-  color: #fff;
-  border: none;
-  padding: 5px 10px;
-  border-radius: 3px;
-  cursor: pointer;
+.zoom-slider-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.zoom-controls button:hover {
-  background: #666;
+.zoom-value {
+  font-size: 14px;
+  color: #fff;
+  text-align: center;
+  font-weight: bold;
+}
+
+.zoom-slider {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #555;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.zoom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #4CAF50;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.zoom-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #4CAF50;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.zoom-slider::-webkit-slider-track {
+  width: 100%;
+  height: 6px;
+  background: #555;
+  border-radius: 3px;
+}
+
+.zoom-slider::-moz-range-track {
+  width: 100%;
+  height: 6px;
+  background: #555;
+  border-radius: 3px;
+  border: none;
+}
+
+.zoom-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #aaa;
+  margin-top: 2px;
+}
+
+.info-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .measure-info {
   font-size: 12px;
   color: #ccc;
+  display: flex;
+  justify-content: space-between;
+}
+
+.selected-info {
+  color: #ffeb3b;
+  font-weight: bold;
+}
+
+/* レスポンシブ対応 */
+@media (max-width: 1024px) {
+  .control-panel {
+    width: 200px;
+    padding: 15px;
+    gap: 20px;
+  }
+  
+  .control-panel h3 {
+    font-size: 13px;
+  }
+  
+  .mode-controls button {
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 768px) {
+  .timeline-editor {
+    flex-direction: column;
+  }
+  
+  .control-panel {
+    width: 100%;
+    height: auto;
+    max-height: 200px;
+    flex-direction: row;
+    padding: 10px 15px;
+    gap: 20px;
+    border-right: none;
+    border-bottom: 1px solid #555;
+  }
+  
+  .mode-controls,
+  .zoom-controls,
+  .info-section {
+    flex: 1;
+  }
+  
+  .mode-controls {
+    flex-direction: row;
+    gap: 5px;
+  }
+  
+  .mode-controls button {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  
+  .timeline-grid {
+    width: 100%;
+    max-width: 480px;
+  }
 }
 </style>
