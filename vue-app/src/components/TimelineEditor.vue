@@ -42,11 +42,89 @@
         </div>
       </div>
       
+      <div class="audio-controls">
+        <h3>音声</h3>
+        <input 
+          type="file" 
+          accept="audio/*" 
+          @change="handleAudioFileChange"
+          ref="audioFileInput"
+          class="audio-file-input"
+        />
+        <div v-if="audioFile" class="audio-info">
+          {{ audioFile.name }}
+        </div>
+        <div class="playback-controls">
+          <button @click="playAudio" :disabled="!audioFile" class="play-btn">
+            {{ isPlaying ? '⏸️' : '▶️' }}
+          </button>
+          <button @click="stopAudio" :disabled="!audioFile" class="stop-btn">
+            ⏹️
+          </button>
+          <span v-if="audioFile" class="time-display">
+            {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
+          </span>
+        </div>
+        <div v-if="audioFile" class="volume-controls">
+          <label>音量: {{ Math.round(volume * 100) }}%</label>
+          <input 
+            type="range" 
+            min="0" 
+            max="100" 
+            step="5" 
+            :value="Math.round(volume * 100)" 
+            @input="handleVolumeChange"
+            class="volume-slider"
+          />
+        </div>
+      </div>
+
+      <div class="timing-controls">
+        <h3>タイミング設定</h3>
+        <div class="timing-input-group">
+          <label>BPM:</label>
+          <input 
+            type="number" 
+            v-model.number="newBPM" 
+            min="60" 
+            max="300" 
+            class="timing-input"
+          />
+        </div>
+        <div class="timing-input-group">
+          <label>拍子:</label>
+          <input 
+            type="number" 
+            v-model.number="newTimeSignatureNumerator" 
+            min="1" 
+            max="16" 
+            class="timing-input timing-input-small"
+          />
+          <span>/</span>
+          <select v-model.number="newTimeSignatureDenominator" class="timing-select">
+            <option value="2">2</option>
+            <option value="4">4</option>
+            <option value="8">8</option>
+            <option value="16">16</option>
+          </select>
+        </div>
+        <button 
+          @click="setTimingPoint" 
+          :disabled="!playbackPosition"
+          class="set-timing-btn">
+          現在位置に設定
+        </button>
+      </div>
+
       <div class="info-section">
         <h3>情報</h3>
         <div class="measure-info">
           <div>表示範囲:</div>
           <div>{{ visibleMeasureRange.start }} - {{ visibleMeasureRange.end }}</div>
+        </div>
+        <div v-if="playbackPosition" class="playback-info">
+          <div>再生位置:</div>
+          <div>{{ playbackPosition.measure }}小節 {{ Math.round(playbackPosition.beat * 4) / 4 }}拍</div>
         </div>
         <div v-if="selectedNotes.size > 0" class="selected-info">
           選択中: {{ selectedNotes.size }}個
@@ -79,8 +157,32 @@
             :class="{ 'measure-line': line.beat === 0, 'beat-line': line.beat !== 0 }"
             :style="{ top: `${line.y}px` }"
           >
-            <span v-if="line.beat === 0" class="measure-number">{{ line.measure }}</span>
           </div>
+        </div>
+
+        <!-- BPM・拍子表示 -->
+        <div class="timing-info-labels">
+          <div
+            v-for="info in timingInfoLabels"
+            :key="`timing-info-${info.measure}-${info.beat}`"
+            class="timing-info-label"
+            :class="{ 'timing-change': info.isChange }"
+            :style="{ top: `${info.y}px` }"
+          >
+            <div class="timing-info-content">
+              <div class="measure-label">{{ info.measure }}小節</div>
+              <div v-if="info.isChange" class="bpm-label">{{ info.bpm }} BPM</div>
+              <div v-if="info.isChange" class="time-signature-label">{{ info.timeSignature[0] }}/{{ info.timeSignature[1] }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 再生位置ライン -->
+        <div
+          v-if="playbackPosition"
+          class="playback-line"
+          :style="{ top: `${getPlaybackLineY(playbackPosition.measure, playbackPosition.beat)}px` }"
+        >
         </div>
 
         <!-- ノート表示 -->
@@ -120,12 +222,26 @@ const chartStore = useChartStore()
 
 // 参照
 const timelineContainer = ref<HTMLElement>()
+const audioFileInput = ref<HTMLInputElement>()
 
 // 表示設定
 const laneWidth = 80
 const beatHeight = ref(120) // 60から120に変更（2倍）
 const zoom = ref(1) // 100%（50%～200%の範囲）
 const scrollTop = ref(0)
+
+// 音声関連
+const audioFile = ref<File | null>(null)
+const audioElement = ref<HTMLAudioElement | null>(null)
+const isPlaying = ref(false)
+const currentTime = ref(0)
+const duration = ref(0)
+const volume = ref(0.5) // 音量（0.0 - 1.0）
+
+// タイミング設定
+const newBPM = ref(120)
+const newTimeSignatureNumerator = ref(4)
+const newTimeSignatureDenominator = ref(4)
 
 // 表示される小節の高さを計算
 const getMeasureHeight = (measure: number) => {
@@ -180,6 +296,85 @@ const timingLines = computed(() => {
   }
   
   return lines
+})
+
+// BPM・拍子情報ラベルのデータを生成
+const timingInfoLabels = computed(() => {
+  const labels: Array<{
+    measure: number
+    beat: number
+    y: number
+    bpm: number
+    timeSignature: [number, number]
+    isChange: boolean
+  }> = []
+  
+  let currentY = 0
+  
+  const maxMeasure = Math.max(
+    10,
+    ...chartStore.timingPoints.map(tp => tp.measure),
+    ...chartStore.notes.map(note => note.measure)
+  )
+  
+  // 1小節目は必ず表示
+  const firstBpm = chartStore.getBpmAt(1, 0)
+  const firstTimeSignature = chartStore.getTimeSignatureAt(1, 0)
+  labels.push({
+    measure: 1,
+    beat: 0,
+    y: totalHeight.value - 0,
+    bpm: firstBpm,
+    timeSignature: firstTimeSignature,
+    isChange: true
+  })
+  currentY += getMeasureHeight(1)
+  
+  // 2小節目以降とタイミング変更点をチェック
+  for (let measure = 2; measure <= maxMeasure; measure++) {
+    const measureHeight = getMeasureHeight(measure)
+    const timeSignature = chartStore.getTimeSignatureAt(measure, 0)
+    const beatHeightInMeasure = measureHeight / timeSignature[0]
+    
+    // この小節内のタイミング変更点をチェック
+    const timingChangesInMeasure = chartStore.timingPoints.filter(tp => tp.measure === measure)
+    
+    for (const timingPoint of timingChangesInMeasure) {
+      const bpm = timingPoint.bpm
+      const timeSignatureAtPoint = timingPoint.timeSignature
+      
+      // Y座標を計算（小節内でのビート位置を考慮）
+      const yPosition = totalHeight.value - (currentY - measureHeight + timingPoint.beat * beatHeightInMeasure)
+      
+      labels.push({
+        measure,
+        beat: timingPoint.beat,
+        y: yPosition,
+        bpm,
+        timeSignature: timeSignatureAtPoint,
+        isChange: true
+      })
+    }
+    
+    // この小節にタイミング変更がない場合は、小節開始位置に通常ラベルを表示
+    if (timingChangesInMeasure.length === 0) {
+      const bpm = chartStore.getBpmAt(measure, 0)
+      const timeSignatureAtMeasure = chartStore.getTimeSignatureAt(measure, 0)
+      
+      labels.push({
+        measure,
+        beat: 0,
+        y: totalHeight.value - currentY,
+        bpm,
+        timeSignature: timeSignatureAtMeasure,
+        isChange: false
+      })
+    }
+    
+    currentY += measureHeight
+  }
+  
+  return labels
 })
 
 // 表示範囲の小節を計算（下から上に流れる表示に対応）
@@ -285,6 +480,26 @@ const getNoteY = (measure: number, beat: number) => {
   return totalHeight.value - y - 7.5
 }
 
+// 再生位置ライン用のY座標計算（正確な拍位置）
+const getPlaybackLineY = (measure: number, beat: number) => {
+  let y = 0
+  
+  // 指定された小節までの累積高さ
+  for (let m = 1; m < measure; m++) {
+    y += getMeasureHeight(m)
+  }
+  
+  // 小節内での位置
+  const timeSignature = chartStore.getTimeSignatureAt(measure, 0)
+  const measureHeight = getMeasureHeight(measure)
+  const beatHeightInMeasure = measureHeight / timeSignature[0]
+  y += beat * beatHeightInMeasure
+  
+  // 下から上に流れるように反転（総高さから引く）
+  // ラインは正確に拍位置に配置（オフセットなし）
+  return totalHeight.value - y
+}
+
 // モード管理
 const setMode = (mode: EditorMode) => {
   currentMode.value = mode
@@ -297,7 +512,7 @@ const setMode = (mode: EditorMode) => {
 const getModeDescription = () => {
   switch (currentMode.value) {
     case 'select':
-      return 'ノートを選択 (Ctrl+クリックで複数選択)'
+      return 'ノートを選択・背景クリックで再生位置設定'
     case 'edit':
       return 'クリック/ドラッグでノート配置'
     case 'delete':
@@ -311,6 +526,266 @@ const getModeDescription = () => {
 const handleZoomChange = (event: Event) => {
   const target = event.target as HTMLInputElement
   zoom.value = parseInt(target.value) / 100
+}
+
+// 音量調整
+const handleVolumeChange = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  volume.value = parseInt(target.value) / 100
+  
+  // 音声要素の音量を更新
+  if (audioElement.value) {
+    audioElement.value.volume = volume.value
+  }
+}
+
+// 音声ファイル読み込み
+const handleAudioFileChange = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  
+  if (file) {
+    audioFile.value = file
+    
+    // HTMLAudioElementを作成
+    audioElement.value = new Audio()
+    audioElement.value.src = URL.createObjectURL(file)
+    audioElement.value.volume = volume.value // 初期音量を設定
+    
+    // イベントリスナーを設定
+    audioElement.value.addEventListener('loadedmetadata', () => {
+      if (audioElement.value) {
+        duration.value = audioElement.value.duration
+      }
+    })
+    
+    audioElement.value.addEventListener('timeupdate', () => {
+      if (audioElement.value) {
+        currentTime.value = audioElement.value.currentTime
+        updatePlaybackPosition()
+      }
+    })
+    
+    // より頻繁な位置更新のためのrequestAnimationFrameループ
+    const startSmoothUpdate = () => {
+      if (isPlaying.value && audioElement.value) {
+        currentTime.value = audioElement.value.currentTime
+        updatePlaybackPosition()
+      }
+      if (isPlaying.value) {
+        requestAnimationFrame(startSmoothUpdate)
+      }
+    }
+    
+    audioElement.value.addEventListener('play', startSmoothUpdate)
+    audioElement.value.addEventListener('pause', () => {
+      // 一時停止時は何もしない（requestAnimationFrameループが自動的に停止）
+    })
+    
+    audioElement.value.addEventListener('ended', () => {
+      isPlaying.value = false
+    })
+  }
+}
+
+// 音声再生/一時停止
+const playAudio = () => {
+  if (!audioElement.value) return
+  
+  if (isPlaying.value) {
+    audioElement.value.pause()
+    isPlaying.value = false
+  } else {
+    // 再生位置から開始
+    if (playbackPosition.value) {
+      const timeAtPosition = getTimeFromPosition(playbackPosition.value.measure, playbackPosition.value.beat)
+      audioElement.value.currentTime = timeAtPosition
+    }
+    audioElement.value.play()
+    isPlaying.value = true
+  }
+}
+
+// 音声停止
+const stopAudio = () => {
+  if (!audioElement.value) return
+  
+  audioElement.value.pause()
+  audioElement.value.currentTime = 0
+  isPlaying.value = false
+}
+
+// 時間フォーマット
+const formatTime = (seconds: number) => {
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+}
+
+// 小節・拍から時間を計算（BPM変化対応版）
+const getTimeFromPosition = (measure: number, beat: number) => {
+  let totalTime = 0
+  let currentMeasure = 1
+  let currentBeat = 0
+  
+  while (currentMeasure < measure || (currentMeasure === measure && currentBeat < beat)) {
+    const bpmAtPosition = chartStore.getBpmAt(currentMeasure, currentBeat)
+    const timeSignature = chartStore.getTimeSignatureAt(currentMeasure, currentBeat)
+    
+    let nextMeasure = currentMeasure
+    let nextBeat = currentBeat + 0.25 // 1/16拍ずつ進む（精度向上）
+    
+    // 小節の境界を越える場合
+    if (nextBeat >= timeSignature[0]) {
+      nextMeasure++
+      nextBeat = 0
+    }
+    
+    // 目標位置を越えないように調整
+    if (nextMeasure > measure || (nextMeasure === measure && nextBeat > beat)) {
+      nextMeasure = measure
+      nextBeat = beat
+    }
+    
+    // この区間の時間を計算
+    const beatDifference = (nextMeasure - currentMeasure) * timeSignature[0] + (nextBeat - currentBeat)
+    const timePerBeat = 60 / bpmAtPosition // 1拍あたりの秒数
+    totalTime += beatDifference * timePerBeat
+    
+    currentMeasure = nextMeasure
+    currentBeat = nextBeat
+  }
+  
+  return totalTime
+}
+
+// 再生中の位置更新（BPM変化対応版）
+const updatePlaybackPosition = () => {
+  if (!isPlaying.value || !audioElement.value) return
+  
+  // 現在の時間から小節・拍を逆算（BPM変化を考慮）
+  const currentSeconds = audioElement.value.currentTime
+  const position = getPositionFromTime(currentSeconds)
+  
+  if (!position) return
+  
+  const newPosition = {
+    measure: position.measure,
+    beat: position.beat
+  }
+  
+  // 毎フレーム位置を更新（閾値を非常に小さくして、ほぼ常に更新）
+  const oldPosition = playbackPosition.value
+  if (!oldPosition || 
+      Math.abs(newPosition.measure - oldPosition.measure) > 0 ||
+      Math.abs(newPosition.beat - oldPosition.beat) > 0.01) { // 閾値を0.1から0.01に縮小
+    
+    playbackPosition.value = newPosition
+    
+    // 毎フレーム滑らかにスクロール更新
+    requestAnimationFrame(() => {
+      scrollToPlaybackPositionSmooth()
+    })
+  }
+}
+
+// 時間から小節・拍を逆算する関数
+const getPositionFromTime = (targetTime: number) => {
+  let currentTime = 0
+  let currentMeasure = 1
+  let currentBeat = 0
+  
+  // 最大100小節まで検索（無限ループ防止）
+  const maxMeasure = Math.max(100, ...chartStore.notes.map(note => note.measure))
+  
+  while (currentMeasure <= maxMeasure && currentTime < targetTime) {
+    const bpmAtPosition = chartStore.getBpmAt(currentMeasure, currentBeat)
+    const timeSignature = chartStore.getTimeSignatureAt(currentMeasure, currentBeat)
+    
+    // 次の1/16拍の位置を計算
+    let nextMeasure = currentMeasure
+    let nextBeat = currentBeat + 0.0625 // 1/16拍ずつ進む（より細かく）
+    
+    // 小節の境界を越える場合
+    if (nextBeat >= timeSignature[0]) {
+      nextMeasure++
+      nextBeat = 0
+    }
+    
+    // この区間の時間を計算
+    const beatDifference = (nextMeasure - currentMeasure) * timeSignature[0] + (nextBeat - currentBeat)
+    const timePerBeat = 60 / bpmAtPosition // 1拍あたりの秒数
+    const deltaTime = beatDifference * timePerBeat
+    
+    // 目標時間を越える場合は補間して正確な位置を求める
+    if (currentTime + deltaTime > targetTime) {
+      const remainingTime = targetTime - currentTime
+      const remainingBeats = remainingTime / timePerBeat
+      
+      return {
+        measure: currentMeasure,
+        beat: Math.max(0, currentBeat + remainingBeats)
+      }
+    }
+    
+    currentTime += deltaTime
+    currentMeasure = nextMeasure
+    currentBeat = nextBeat
+  }
+  
+  return {
+    measure: currentMeasure,
+    beat: Math.max(0, currentBeat)
+  }
+}
+
+// 再生位置への完全滑らかスクロール
+const scrollToPlaybackPositionSmooth = () => {
+  if (!timelineContainer.value || !playbackPosition.value) return
+  
+  const lineY = getPlaybackLineY(playbackPosition.value.measure, playbackPosition.value.beat)
+  const containerHeight = timelineContainer.value.clientHeight
+  
+  // 下から上への座標系に合わせて修正
+  const targetScroll = lineY - containerHeight / 2
+  const clampedTarget = Math.max(0, Math.min(targetScroll, totalHeight.value - containerHeight))
+  
+  // 現在のスクロール位置
+  const currentScroll = timelineContainer.value.scrollTop
+  
+  // 差が小さい場合は直接スクロール（アニメーションなし）
+  const scrollDiff = Math.abs(clampedTarget - currentScroll)
+  if (scrollDiff < 2) {
+    timelineContainer.value.scrollTop = clampedTarget
+    return
+  }
+  
+  // 大きな差がある場合は補間を使って滑らかにスクロール
+  const interpolationFactor = 0.1 // 補間の強さ（0.1 = 10%ずつ近づく）
+  const newScrollPosition = currentScroll + (clampedTarget - currentScroll) * interpolationFactor
+  
+  timelineContainer.value.scrollTop = newScrollPosition
+}
+
+
+
+// タイミングポイント設定
+const setTimingPoint = () => {
+  if (!playbackPosition.value) return
+  
+  chartStore.addTimingPoint({
+    measure: playbackPosition.value.measure,
+    beat: playbackPosition.value.beat,
+    bpm: newBPM.value,
+    timeSignature: [newTimeSignatureNumerator.value, newTimeSignatureDenominator.value]
+  })
+  
+  console.log('Added timing point:', {
+    measure: playbackPosition.value.measure,
+    beat: playbackPosition.value.beat,
+    bpm: newBPM.value,
+    timeSignature: [newTimeSignatureNumerator.value, newTimeSignatureDenominator.value]
+  })
 }
 
 // 選択状態の判定
@@ -390,6 +865,14 @@ type EditorMode = 'select' | 'edit' | 'delete'
 const currentMode = ref<EditorMode>('edit')
 const selectedNotes = ref<Set<number>>(new Set())
 
+// 再生位置ライン（初期位置は1小節目の1拍目）
+const playbackPosition = ref<{ measure: number; beat: number } | null>({
+  measure: 1,
+  beat: 0
+})
+
+
+
 // ドラッグ状態管理
 const isDragging = ref(false)
 const dragStartTime = ref(0)
@@ -454,9 +937,18 @@ const handleMouseDown = (event: MouseEvent) => {
   
   // 編集モード以外では新規ノート作成しない
   if (currentMode.value !== 'edit') {
-    // 選択モードで背景クリックした場合は全選択解除
+    // 選択モードで背景クリックした場合は再生位置を設定
     if (currentMode.value === 'select') {
-      selectedNotes.value.clear()
+      const position = getPositionFromMouseEvent(event)
+      if (position) {
+        playbackPosition.value = {
+          measure: position.measure,
+          beat: position.beat
+        }
+        console.log('Set playback position:', playbackPosition.value)
+      }
+      // 全選択解除は削除（再生位置設定がメイン機能となる）
+      // selectedNotes.value.clear()
     }
     return
   }
@@ -581,6 +1073,7 @@ onUnmounted(() => {
   position: relative;
   background: #2a2a2a;
   padding-bottom: 40px; /* 最下部のノートが確実に表示されるためのパディング */
+  padding-left: 100px; /* BPM・拍子表示のためのスペース */
 }
 
 .timeline-grid {
@@ -631,15 +1124,62 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.3);
 }
 
-.measure-number {
+/* BPM・拍子情報ラベル */
+.timing-info-labels {
   position: absolute;
-  left: -30px;
-  top: -10px;
-  font-size: 12px;
-  color: #fff;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100%;
+  pointer-events: none;
+}
+
+.timing-info-label {
+  position: absolute;
+  left: -100px; /* レーンの左側に配置 */
+  z-index: 5;
+}
+
+.timing-info-content {
   background: rgba(0, 0, 0, 0.7);
-  padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: 4px;
+  padding: 4px 8px;
+  border-left: 2px solid #666;
+  min-width: 80px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.timing-info-label.timing-change .timing-info-content {
+  border-left-color: #ff6666;
+  background: rgba(40, 0, 0, 0.9);
+  border-left-width: 3px;
+  box-shadow: 0 2px 6px rgba(255, 102, 102, 0.3);
+}
+
+.measure-label {
+  font-size: 11px;
+  color: #ccc;
+  font-weight: 600;
+  margin-bottom: 1px;
+}
+
+.timing-info-label.timing-change .measure-label {
+  color: #fff;
+  font-weight: bold;
+}
+
+.bpm-label {
+  font-size: 10px;
+  color: #ff8888;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.time-signature-label {
+  font-size: 10px;
+  color: #88ccff;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 /* ノート */
@@ -690,6 +1230,18 @@ onUnmounted(() => {
   background: #ffeb3b !important;
   border-color: #ff9800 !important;
   box-shadow: 0 0 8px rgba(255, 235, 59, 0.8);
+}
+
+/* 再生位置ライン */
+.playback-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(to right, #ff4444, #ff6666);
+  z-index: 15;
+  pointer-events: none;
+  box-shadow: 0 0 6px rgba(255, 68, 68, 0.6);
 }
 
 /* コントロールパネル（左側） */
@@ -823,6 +1375,194 @@ onUnmounted(() => {
   margin-top: 2px;
 }
 
+/* 音声コントロール */
+.audio-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.audio-file-input {
+  width: 100%;
+  padding: 8px;
+  background: #555;
+  color: #fff;
+  border: 1px solid #666;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.audio-info {
+  font-size: 11px;
+  color: #ccc;
+  word-break: break-all;
+}
+
+.playback-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.play-btn, .stop-btn {
+  background: #555;
+  color: #fff;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  min-width: 40px;
+}
+
+.play-btn:hover, .stop-btn:hover {
+  background: #666;
+}
+
+.play-btn:disabled, .stop-btn:disabled {
+  background: #444;
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.time-display {
+  font-size: 11px;
+  color: #ccc;
+  font-family: monospace;
+}
+
+/* 音量コントロール */
+.volume-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.volume-controls label {
+  font-size: 11px;
+  color: #ccc;
+  text-align: center;
+}
+
+.volume-slider {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: #555;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ff6666;
+  cursor: pointer;
+  border: 1px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ff6666;
+  cursor: pointer;
+  border: 1px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.volume-slider::-webkit-slider-track {
+  width: 100%;
+  height: 4px;
+  background: #555;
+  border-radius: 2px;
+}
+
+.volume-slider::-moz-range-track {
+  width: 100%;
+  height: 4px;
+  background: #555;
+  border-radius: 2px;
+  border: none;
+}
+
+/* タイミングコントロール */
+.timing-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.timing-input-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.timing-input-group label {
+  font-size: 12px;
+  color: #ccc;
+  min-width: 40px;
+}
+
+.timing-input {
+  background: #555;
+  color: #fff;
+  border: 1px solid #666;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  width: 60px;
+}
+
+.timing-input-small {
+  width: 40px;
+}
+
+.timing-select {
+  background: #555;
+  color: #fff;
+  border: 1px solid #666;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  width: 50px;
+}
+
+.set-timing-btn {
+  background: #4CAF50;
+  color: #fff;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.set-timing-btn:hover {
+  background: #45a049;
+}
+
+.set-timing-btn:disabled {
+  background: #444;
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.playback-info {
+  font-size: 12px;
+  color: #ff6666;
+  display: flex;
+  justify-content: space-between;
+  font-weight: bold;
+}
+
 .info-section {
   display: flex;
   flex-direction: column;
@@ -891,9 +1631,32 @@ onUnmounted(() => {
     font-size: 12px;
   }
   
+  .timeline-container {
+    padding-left: 100px; /* モバイルでは小さく */
+  }
+  
   .timeline-grid {
     width: 100%;
     max-width: 480px;
+    margin-left: calc(50% - 240px - 50px); /* モバイル用調整 */
+  }
+  
+  .timing-info-label {
+    left: -90px; /* モバイルでは小さく */
+  }
+  
+  .timing-info-content {
+    min-width: 60px; /* モバイルでは小さく */
+    padding: 3px 6px;
+  }
+  
+  .measure-label {
+    font-size: 10px;
+  }
+  
+  .bpm-label,
+  .time-signature-label {
+    font-size: 9px;
   }
 }
 </style>
