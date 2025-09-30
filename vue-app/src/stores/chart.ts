@@ -7,6 +7,7 @@ export interface SongInfo {
   audioFile: string
   audioOffset: number
   emptyMeasures: number
+  totalMeasures: number // 総小節数を追加
   volume: number
   difficulty: string
   level: number
@@ -41,6 +42,7 @@ export const useChartStore = defineStore('chart', () => {
     audioFile: '',
     audioOffset: 0,
     emptyMeasures: 1,
+    totalMeasures: 100, // デフォルト100小節
     volume: 0.5,
     difficulty: 'Normal',
     level: 1
@@ -104,11 +106,15 @@ export const useChartStore = defineStore('chart', () => {
   }
 
   const addTimingPoint = (timingPoint: TimingPoint) => {
+    console.log('Adding timing point:', timingPoint)
+    
     timingPoints.value.push(timingPoint)
     timingPoints.value.sort((a, b) => {
       if (a.measure !== b.measure) return a.measure - b.measure
       return a.beat - b.beat
     })
+    
+    console.log('Result timing points:', timingPoints.value)
   }
 
   const addNote = (note: Note) => {
@@ -122,6 +128,10 @@ export const useChartStore = defineStore('chart', () => {
 
   const removeNote = (index: number) => {
     notes.value.splice(index, 1)
+  }
+
+  const removeTimingPoint = (index: number) => {
+    timingPoints.value.splice(index, 1)
   }
 
   const clearNotes = () => {
@@ -152,6 +162,7 @@ export const useChartStore = defineStore('chart', () => {
     addTimingPoint,
     addNote,
     removeNote,
+    removeTimingPoint,
     clearNotes,
     loadChartData,
     exportChartData
