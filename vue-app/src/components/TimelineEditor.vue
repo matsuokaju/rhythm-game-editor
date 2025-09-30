@@ -79,21 +79,23 @@
 
       <div class="action-mode-controls">
         <h3>{{ editType === 'notes' ? 'ノーツ' : 'タイミング' }}操作</h3>
-        <button 
-          @click="setActionMode('select')" 
-          :class="{ active: actionMode === 'select' }">
-          選択
-        </button>
-        <button 
-          @click="setActionMode('edit')" 
-          :class="{ active: actionMode === 'edit' }">
-          {{ editType === 'notes' ? '配置' : '設定' }}
-        </button>
-        <button 
-          @click="setActionMode('delete')" 
-          :class="{ active: actionMode === 'delete' }">
-          削除
-        </button>
+        <div class="action-buttons">
+          <button 
+            @click="setActionMode('select')" 
+            :class="{ active: actionMode === 'select' }">
+            選択
+          </button>
+          <button 
+            @click="setActionMode('edit')" 
+            :class="{ active: actionMode === 'edit' }">
+            {{ editType === 'notes' ? '配置' : '設定' }}
+          </button>
+          <button 
+            @click="setActionMode('delete')" 
+            :class="{ active: actionMode === 'delete' }">
+            削除
+          </button>
+        </div>
         <div class="mode-info">{{ getActionModeDescription() }}</div>
       </div>
     </div>
@@ -163,7 +165,7 @@
             @click="handleTimingLabelClick(info.measure, info.beat)"
           >
             <div class="timing-change-content">
-              <div class="bpm-label">{{ info.bpm }} BPM</div>
+              <div class="bpm-label">{{ info.bpm }}</div>
               <div class="time-signature-label">{{ info.timeSignature[0] }}/{{ info.timeSignature[1] }}</div>
             </div>
           </div>
@@ -1296,8 +1298,8 @@ onUnmounted(() => {
   position: relative;
   background: #2a2a2a;
   padding-bottom: 40px; /* 最下部のノートが確実に表示されるためのパディング */
-  padding-left: 80px;
-  padding-right: 80px;
+  padding-left: 120px;
+  padding-right: 120px;
 }
 
 .timeline-grid {
@@ -1412,7 +1414,7 @@ onUnmounted(() => {
 
 .timing-change-label-right {
   left: auto;
-  right: -100px; /* 右側に配置 */
+  right: -50px; /* 右側に配置 */
 }
 
 .timing-change-content {
@@ -1420,7 +1422,7 @@ onUnmounted(() => {
   border-radius: 4px;
   padding: 4px 8px;
   border-left: 3px solid #ff6666;
-  min-width: 80px;
+  min-width: 40px;
   box-shadow: 0 2px 6px rgba(255, 102, 102, 0.3);
 }
 
@@ -1590,6 +1592,13 @@ onUnmounted(() => {
   margin-bottom: 20px;
 }
 
+.action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
 .action-mode-controls button {
   background: #444;
   color: #ccc;
@@ -1601,8 +1610,8 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 500;
   text-align: center;
-  width: 100%;
-  margin-bottom: 6px;
+  flex: 1;
+  min-width: 70px;
 }
 
 .action-mode-controls button:hover {
