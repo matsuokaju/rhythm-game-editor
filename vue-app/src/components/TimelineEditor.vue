@@ -3,6 +3,28 @@
     <!-- コントロールパネル（左側） -->
     <div class="control-panel">
 
+      <!-- ズーム -->
+      <div class="zoom-controls">
+        <h3>ズーム</h3>
+        <div class="zoom-slider-container">
+          <span class="zoom-value">{{ Math.round(zoom * 100) }}%</span>
+          <input 
+            type="range" 
+            min="50" 
+            max="200" 
+            step="10" 
+            :value="Math.round(zoom * 100)" 
+            @input="handleZoomChange"
+            class="zoom-slider"
+          />
+          <div class="zoom-labels">
+            <span>50%</span>
+            <span>200%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 編集対象 -->
       <div class="edit-type-toggle">
         <h3>編集対象</h3>
         <div class="toggle-buttons">
@@ -19,6 +41,7 @@
         </div>
       </div>
 
+      <!-- 操作モード -->
       <div class="action-mode-controls">
         <h3>{{ editType === 'notes' ? 'ノーツ' : 'タイミング' }}操作</h3>
         <div class="action-buttons">
@@ -41,6 +64,7 @@
         <div class="mode-info">{{ getActionModeDescription() }}</div>
       </div>
 
+      <!-- グリッド間隔 -->
       <div class="grid-division-controls">
         <h3>グリッド間隔</h3>
         <div class="division-buttons">
@@ -241,27 +265,6 @@
             @input="handleVolumeChange"
             class="volume-slider"
           />
-        </div>
-      </div>
-      
-      <!-- ズーム -->
-      <div class="zoom-controls">
-        <h3>ズーム</h3>
-        <div class="zoom-slider-container">
-          <span class="zoom-value">{{ Math.round(zoom * 100) }}%</span>
-          <input 
-            type="range" 
-            min="50" 
-            max="200" 
-            step="10" 
-            :value="Math.round(zoom * 100)" 
-            @input="handleZoomChange"
-            class="zoom-slider"
-          />
-          <div class="zoom-labels">
-            <span>50%</span>
-            <span>200%</span>
-          </div>
         </div>
       </div>
       
