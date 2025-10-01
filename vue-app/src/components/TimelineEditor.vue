@@ -65,14 +65,14 @@
         <h3>編集対象</h3>
         <div class="toggle-buttons">
           <button 
-            @click="setEditType('notes')" 
-            :class="{ active: editType === 'notes' }">
-            ノーツ
-          </button>
-          <button 
             @click="setEditType('timing')" 
             :class="{ active: editType === 'timing' }">
             タイミング
+          </button>
+          <button 
+            @click="setEditType('notes')" 
+            :class="{ active: editType === 'notes' }">
+            ノーツ
           </button>
         </div>
       </div>
@@ -186,7 +186,7 @@
             v-for="(note, index) in visibleNotes"
             :key="`note-${index}`"
             class="note"
-            :class="`note-${note.type}`"
+            :class="[`note-${note.type}`, { selected: isNoteSelected(index) }]"
             :style="getNoteStyle(note)"
             @click="handleNoteClick($event, index)"
           >
@@ -331,11 +331,18 @@ const currentTime = ref(0)
 const duration = ref(0)
 const volume = ref(0.5) // 音量（0.0 - 1.0）
 
+// SE関連
+const tickSoundElement = ref<HTMLAudioElement | null>(null)
+const playedNotes = ref<Set<string>>(new Set()) // 再生済みノートを追跡
+
 
 
 // 編集モード
-const editType = ref<'notes' | 'timing'>('notes')
-const actionMode = ref<'select' | 'edit' | 'delete'>('edit')
+const editType = ref<'notes' | 'timing'>('timing')
+const actionMode = ref<'select' | 'edit' | 'delete'>('select')
+
+// ノート選択機能
+const selectedNotes = ref<Set<number>>(new Set()) // 選択されたノートのインデックス
 
 // タイミングダイアログ
 const showTimingDialog = ref(false)
@@ -645,6 +652,9 @@ const handleAudioFileChange = (event: Event) => {
   if (file) {
     audioFile.value = file
     
+    // 新しい音声ファイル読み込み時に再生済みノートをリセット
+    resetPlayedNotes()
+    
     // HTMLAudioElementを作成
     audioElement.value = new Audio()
     audioElement.value.src = URL.createObjectURL(file)
@@ -675,13 +685,22 @@ const handleAudioFileChange = (event: Event) => {
       }
     }
     
-    audioElement.value.addEventListener('play', startSmoothUpdate)
+    audioElement.value.addEventListener('play', () => {
+      // 再生開始時にリセット（確実にリセットするため）
+      console.log('Audio play event - resetting played notes')
+      resetPlayedNotes()
+      startSmoothUpdate()
+    })
+    
     audioElement.value.addEventListener('pause', () => {
       // 一時停止時は何もしない（requestAnimationFrameループが自動的に停止）
     })
     
     audioElement.value.addEventListener('ended', () => {
       isPlaying.value = false
+      // 再生終了時にもリセット
+      console.log('Audio ended - resetting played notes')
+      resetPlayedNotes()
     })
   }
 }
@@ -694,11 +713,16 @@ const playAudio = () => {
     audioElement.value.pause()
     isPlaying.value = false
   } else {
+    // 再生開始時は常に全てリセット（シンプルで確実）
+    console.log('Starting playback - resetting all played notes')
+    resetPlayedNotes()
+    
     // 再生位置から開始
     if (playbackPosition.value) {
       const timeAtPosition = getTimeFromPosition(playbackPosition.value.measure, playbackPosition.value.beat)
       audioElement.value.currentTime = timeAtPosition
     }
+    
     audioElement.value.play()
     isPlaying.value = true
   }
@@ -708,9 +732,11 @@ const playAudio = () => {
 const stopAudio = () => {
   if (!audioElement.value) return
   
+  console.log('Stopping audio - resetting played notes')
   audioElement.value.pause()
   audioElement.value.currentTime = 0
   isPlaying.value = false
+  resetPlayedNotes() // 再生済みノートをリセット
 }
 
 // 時間フォーマット
@@ -757,6 +783,56 @@ const getTimeFromPosition = (measure: number, beat: number) => {
   return totalTime
 }
 
+// ノートのユニークキーを生成
+const getNoteKey = (measure: number, beat: number, lane: number) => {
+  return `${measure}-${beat.toFixed(3)}-${lane}`
+}
+
+// ノートヒット検出とSE再生
+const checkAndPlayNoteSE = (currentPos: { measure: number; beat: number }) => {
+  if (!tickSoundElement.value) return
+
+  // 現在位置付近のノートを検索（±0.05拍の範囲）
+  const tolerance = 0.05
+  
+  chartStore.notes.forEach(note => {
+    // タップノートまたはロングノートの始点をチェック
+    const noteBeat = note.beat
+    const beatDiff = Math.abs(currentPos.beat - noteBeat)
+    const measureMatch = currentPos.measure === note.measure
+    
+    if (measureMatch && beatDiff <= tolerance) {
+      const noteKey = getNoteKey(note.measure, note.beat, note.lane)
+      
+      // まだ再生していないノートの場合のみSEを再生
+      if (!playedNotes.value.has(noteKey)) {
+        playedNotes.value.add(noteKey)
+        console.log(`Playing SE for note: ${noteKey} at position ${currentPos.measure}-${currentPos.beat.toFixed(3)}`)
+        
+        // SEを再生（複数同時再生対応）
+        if (tickSoundElement.value) {
+          const tickSound = tickSoundElement.value.cloneNode() as HTMLAudioElement
+          tickSound.volume = 0.3
+          tickSound.play().catch(error => {
+            console.warn('SE再生エラー:', error)
+          })
+        }
+      } else {
+        console.log(`Skipping already played note: ${noteKey}`)
+      }
+    }
+  })
+}
+
+// 再生停止時に再生済みノートをリセット
+const resetPlayedNotes = () => {
+  const prevSize = playedNotes.value.size
+  playedNotes.value.clear()
+  console.log(`Reset played notes (cleared ${prevSize} notes)`)
+}
+
+
+
 // 再生中の位置更新（BPM変化対応版）
 const updatePlaybackPosition = () => {
   if (!isPlaying.value || !audioElement.value) return
@@ -779,6 +855,9 @@ const updatePlaybackPosition = () => {
       Math.abs(newPosition.beat - oldPosition.beat) > 0.01) { // 閾値を0.1から0.01に縮小
     
     playbackPosition.value = newPosition
+    
+    // ノートヒット検出とSE再生
+    checkAndPlayNoteSE(newPosition)
     
     // 毎フレーム滑らかにスクロール更新
     requestAnimationFrame(() => {
@@ -1013,13 +1092,50 @@ const handleTimingLabelClick = (measure: number, beat: number) => {
   }
 }
 
+// ノートが選択されているかチェック
+const isNoteSelected = (index: number) => {
+  const noteToCheck = visibleNotes.value[index]
+  const actualIndex = chartStore.notes.findIndex(note => 
+    note.measure === noteToCheck.measure &&
+    note.beat === noteToCheck.beat &&
+    note.lane === noteToCheck.lane &&
+    note.type === noteToCheck.type
+  )
+  return actualIndex !== -1 && selectedNotes.value.has(actualIndex)
+}
+
 // ノートクリック処理（新しいモードシステム対応）
 const handleNoteClick = (event: MouseEvent, index: number) => {
   event.stopPropagation() // バブリングを防ぐ
   
   if (editType.value !== 'notes') return
   
-  if (actionMode.value === 'delete') {
+  if (actionMode.value === 'select') {
+    // ノート選択
+    const noteToSelect = visibleNotes.value[index]
+    const actualIndex = chartStore.notes.findIndex(note => 
+      note.measure === noteToSelect.measure &&
+      note.beat === noteToSelect.beat &&
+      note.lane === noteToSelect.lane &&
+      note.type === noteToSelect.type
+    )
+    
+    if (actualIndex !== -1) {
+      // Ctrlキーが押されている場合は複数選択
+      if (event.ctrlKey || event.metaKey) {
+        if (selectedNotes.value.has(actualIndex)) {
+          selectedNotes.value.delete(actualIndex)
+        } else {
+          selectedNotes.value.add(actualIndex)
+        }
+      } else {
+        // 単一選択
+        selectedNotes.value.clear()
+        selectedNotes.value.add(actualIndex)
+      }
+      console.log('Selected notes:', Array.from(selectedNotes.value))
+    }
+  } else if (actionMode.value === 'delete') {
     // ノート削除
     const noteToDelete = visibleNotes.value[index]
     const actualIndex = chartStore.notes.findIndex(note => 
@@ -1031,9 +1147,10 @@ const handleNoteClick = (event: MouseEvent, index: number) => {
     
     if (actualIndex !== -1) {
       chartStore.removeNote(actualIndex)
+      // 削除されたノートを選択状態からも除去
+      selectedNotes.value.delete(actualIndex)
     }
   }
-  // selectモードとeditモードは今回は簡略化（必要に応じて後で実装）
 }
 
 // 削除されたモード管理（新しいeditType/actionModeシステムに置き換え）
@@ -1166,12 +1283,11 @@ const handleMouseDown = (event: MouseEvent) => {
       }
       console.log('Started drag at:', position)
     } else if (actionMode.value === 'select') {
-      // 再生位置を設定
-      playbackPosition.value = {
-        measure: position.measure,
-        beat: position.beat
+      // ノート選択モードの場合、空いている場所をクリックしたら選択をクリア
+      if (!event.ctrlKey && !event.metaKey) {
+        selectedNotes.value.clear()
+        console.log('Cleared note selection')
       }
-      console.log('Set playback position:', playbackPosition.value)
     }
   }
 }
@@ -1273,6 +1389,10 @@ onMounted(() => {
       }
     }, 100)
   }
+  
+  // SEファイルを読み込み
+  tickSoundElement.value = new Audio('/resource/tick.wav')
+  tickSoundElement.value.volume = 0.3 // SEの音量を調整
 })
 
 onUnmounted(() => {
