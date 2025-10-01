@@ -98,6 +98,22 @@
         </div>
         <div class="mode-info">{{ getActionModeDescription() }}</div>
       </div>
+
+      <div class="grid-division-controls">
+        <h3>グリッド間隔</h3>
+        <div class="division-buttons">
+          <button 
+            v-for="division in availableDivisions"
+            :key="division"
+            @click="setGridDivision(division)"
+            :class="{ active: gridDivision === division }"
+            class="division-btn"
+          >
+            {{ division }}
+          </button>
+        </div>
+        <div class="division-info">{{ getDivisionDescription() }}</div>
+      </div>
     </div>
 
     <div class="timeline-container" 
@@ -202,6 +218,13 @@
           >
             <div v-if="previewNote.type === 'hold'" class="hold-tail" :style="getHoldTailStyle()"></div>
           </div>
+
+          <!-- ホバープレビューノート -->
+          <div
+            v-if="hoverPreviewNote"
+            class="note note-hover-preview"
+            :style="getHoverPreviewNoteStyle(hoverPreviewNote)"
+          ></div>
         </div>
       </div>
     </div>
@@ -256,7 +279,7 @@
         <h3>タイミング設定</h3>
         <div class="dialog-content">
           <div class="position-info">
-            <span>位置: {{ timingDialogPosition?.measure }}小節 {{ (timingDialogPosition?.beat || 0).toFixed(2) }}拍目</span>
+            <span>位置: {{ timingDialogPosition?.measure }}小節 {{ (timingDialogPosition?.beat || 0).toFixed(3) }}拍目</span>
           </div>
           
           <div class="timing-input-group">
@@ -343,6 +366,10 @@ const actionMode = ref<'select' | 'edit' | 'delete'>('select')
 
 // ノート選択機能
 const selectedNotes = ref<Set<number>>(new Set()) // 選択されたノートのインデックス
+
+// グリッド間隔設定
+const gridDivision = ref(16) // デフォルトは16分音符（0.25拍間隔）
+const availableDivisions = [4, 6, 8, 12, 16, 24, 32] // 利用可能な分割数
 
 // タイミングダイアログ
 const showTimingDialog = ref(false)
@@ -583,6 +610,21 @@ const getNoteStyle = (note: Note) => {
 const getHoldTailStyle = () => {
   // 新しいデザインでは尻尾は表示しない
   return { display: 'none' }
+}
+
+// ホバープレビューノーツのスタイル
+const getHoverPreviewNoteStyle = (position: { measure: number; beat: number; lane: number }) => {
+  const y = getNoteY(position.measure, position.beat)
+  const x = position.lane * laneWidth + 2.5 // レーン中央に配置（0ベース）
+  
+  return {
+    position: 'absolute' as const,
+    left: `${x}px`,
+    top: `${y}px`,
+    width: `${laneWidth - 5}px`,
+    height: '8px',
+    zIndex: 5 // 通常ノーツより低く、背景より高く
+  }
 }
 
 // 小節・拍からY座標を計算（下から上に流れるように反転、ノート中央が拍位置に来るよう調整）
@@ -956,6 +998,26 @@ const setActionMode = (mode: 'select' | 'edit' | 'delete') => {
   actionMode.value = mode
 }
 
+// グリッド間隔の設定
+const setGridDivision = (division: number) => {
+  gridDivision.value = division
+}
+
+// グリッド間隔の説明を取得
+const getDivisionDescription = () => {
+  const noteNames: { [key: number]: string } = {
+    4: '4分音符',
+    6: '4分3連符', 
+    8: '8分音符',
+    12: '8分3連符',
+    16: '16分音符',
+    24: '16分3連符',
+    32: '32分音符'
+  }
+  const beatInterval = 4 / gridDivision.value
+  return `${noteNames[gridDivision.value]} (${beatInterval.toFixed(3)}拍間隔)`
+}
+
 // アクションモードの説明を取得
 const getActionModeDescription = () => {
   if (editType.value === 'notes') {
@@ -1169,6 +1231,9 @@ const dragStartTime = ref(0)
 const dragStartPosition = ref<{ measure: number; beat: number; lane: number } | null>(null)
 const previewNote = ref<Note | null>(null)
 
+// ホバープレビューノーツ
+const hoverPreviewNote = ref<{ measure: number; beat: number; lane: number } | null>(null)
+
 // マウス座標から小節・拍・レーンを計算（改良版）
 const getPositionFromMouseEvent = (event: MouseEvent) => {
   if (!timelineContainer.value) return null
@@ -1211,15 +1276,16 @@ const getPositionFromMouseEvent = (event: MouseEvent) => {
       const positionInMeasure = adjustedY - accumulatedHeight
       const beat = (positionInMeasure / measureHeight) * timeSignature[0]
       
-      // 1/4拍単位にスナップ
-      let snappedBeat = Math.round(beat * 4) / 4
+      // グリッド間隔に基づいてスナップ
+      const snapInterval = 4 / gridDivision.value // 拍単位での間隔
+      let snappedBeat = Math.round(beat / snapInterval) * snapInterval
       
-      // 小節の頭付近（0.125拍以内）は0拍目に強制スナップ
-      if (snappedBeat < 0.125) {
+      // 小節の頭付近（間隔の半分以内）は0拍目に強制スナップ
+      if (snappedBeat < snapInterval / 2) {
         snappedBeat = 0
       }
       // 小節の最後付近は次の小節の0拍目として扱う
-      if (snappedBeat >= timeSignature[0] - 0.125) {
+      if (snappedBeat >= timeSignature[0] - snapInterval / 2) {
         snappedBeat = 0
         measure = measure + 1
       }
@@ -1293,9 +1359,17 @@ const handleMouseDown = (event: MouseEvent) => {
 }
 
 const handleMouseMove = (event: MouseEvent) => {
+  const currentPosition = getPositionFromMouseEvent(event)
+  
+  // ホバープレビューノーツの更新（配置モードでドラッグしていない場合）
+  if (!isDragging.value && editType.value === 'notes' && actionMode.value === 'edit' && currentPosition) {
+    hoverPreviewNote.value = currentPosition
+  } else {
+    hoverPreviewNote.value = null
+  }
+  
   if (!isDragging.value || !dragStartPosition.value || editType.value !== 'notes' || actionMode.value !== 'edit') return
   
-  const currentPosition = getPositionFromMouseEvent(event)
   if (!currentPosition) return
   
   console.log('Mouse move:', currentPosition)
@@ -1370,6 +1444,7 @@ const handleMouseUp = () => {
   isDragging.value = false
   dragStartPosition.value = null
   previewNote.value = null
+  hoverPreviewNote.value = null
 }
 
 // スクロール監視
@@ -1598,6 +1673,14 @@ onUnmounted(() => {
   border-style: dashed !important;
 }
 
+.note-hover-preview {
+  background: rgba(255, 255, 255, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 2px;
+  opacity: 0.7;
+  pointer-events: none; /* マウスイベントを通す */
+}
+
 .hold-tail {
   background: linear-gradient(to bottom, #4ECDC4, #26D0CE);
   border-radius: 2px;
@@ -1753,6 +1836,53 @@ onUnmounted(() => {
   color: #aaa;
   border-left: 3px solid #007acc;
   margin-top: 10px;
+}
+
+/* グリッド間隔コントロール */
+.grid-division-controls {
+  margin-bottom: 20px;
+}
+
+.division-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.division-btn {
+  background: #444;
+  color: #ccc;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  min-width: 30px;
+}
+
+.division-btn:hover {
+  background: #555;
+  color: #fff;
+}
+
+.division-btn.active {
+  background: #9c27b0;
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(156, 39, 176, 0.3);
+}
+
+.division-info {
+  background: #1a1a1a;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #aaa;
+  border-left: 3px solid #9c27b0;
+  text-align: center;
 }
 
 /* 楽曲設定 */
@@ -2152,6 +2282,17 @@ onUnmounted(() => {
   .mode-info {
     font-size: 11px;
     padding: 6px 8px;
+  }
+  
+  .division-btn {
+    padding: 4px 6px;
+    font-size: 10px;
+    min-width: 24px;
+  }
+  
+  .division-info {
+    font-size: 9px;
+    padding: 4px 6px;
   }
   
   .timeline-container {
