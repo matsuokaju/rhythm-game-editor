@@ -45,59 +45,64 @@ export const useChartStore = defineStore('chart', () => {
     totalMeasures: 100, // デフォルト100小節
     volume: 0.5,
     difficulty: 'Normal',
-    level: 1
+    level: 1,
   })
 
   const timingPoints = ref<TimingPoint[]>([
-    { measure: 1, beat: 0, bpm: 120, timeSignature: [4, 4] }
+    { measure: 1, beat: 0, bpm: 120, timeSignature: [4, 4] },
   ])
 
   const notes = ref<Note[]>([
     // テスト用のサンプルノート
-    { measure: 1, beat: 0.0, lane: 0, type: 'hold', duration: 3.0 },
-    { measure: 1, beat: 0.0, lane: 5, type: 'tap' },
-    { measure: 1, beat: 1.0, lane: 4, type: 'tap' },
-    { measure: 1, beat: 1.333, lane: 1, type: 'tap' },
-    { measure: 1, beat: 1.667, lane: 2, type: 'tap' },
-    { measure: 1, beat: 2.0, lane: 3, type: 'tap' },
-    { measure: 1, beat: 3.0, lane: 2, type: 'tap' },
-    { measure: 1, beat: 3.0, lane: 5, type: 'tap' },
-    { measure: 2, beat: 0.0, lane: 0, type: 'tap' },
+    { measure: 1, beat: 0.0, lane: 0, type: 'hold', duration: 4.0 },
+    { measure: 1, beat: 1.0, lane: 1, type: 'tap' },
+    { measure: 1, beat: 2.0, lane: 2, type: 'tap' },
+    { measure: 1, beat: 3.0, lane: 3, type: 'tap' },
+    { measure: 2, beat: 0.0, lane: 5, type: 'hold', duration: 4.0 },
     { measure: 2, beat: 1.0, lane: 4, type: 'tap' },
-    { measure: 2, beat: 1.0, lane: 5, type: 'tap' },
-    { measure: 2, beat: 2.0, lane: 2, type: 'tap' },
-    { measure: 2, beat: 2.0, lane: 3, type: 'hold', duration: 3.0 }
+    { measure: 2, beat: 2.0, lane: 3, type: 'tap' },
+    { measure: 2, beat: 3.0, lane: 2, type: 'tap' },
+    { measure: 3, beat: 0.0, lane: 0, type: 'hold', duration: 4.0 },
+    { measure: 3, beat: 1.0, lane: 1, type: 'tap' },
+    { measure: 3, beat: 2.0, lane: 2, type: 'tap' },
+    { measure: 3, beat: 3.0, lane: 3, type: 'tap' },
+    { measure: 4, beat: 0.0, lane: 5, type: 'hold', duration: 4.0 },
+    { measure: 4, beat: 1.0, lane: 4, type: 'tap' },
+    { measure: 4, beat: 2.0, lane: 3, type: 'tap' },
+    { measure: 4, beat: 3.0, lane: 2, type: 'tap' },
   ])
 
   // ゲッター
   const chartData = computed<ChartData>(() => ({
     songInfo: songInfo.value,
     timingPoints: timingPoints.value,
-    notes: notes.value
+    notes: notes.value,
   }))
 
   // BPMを取得（指定した小節・拍における）
   const getBpmAt = (measure: number, beat: number) => {
     const relevantPoints = timingPoints.value
-      .filter(tp => tp.measure < measure || (tp.measure === measure && tp.beat <= beat))
+      .filter((tp) => tp.measure < measure || (tp.measure === measure && tp.beat <= beat))
       .sort((a, b) => {
         if (a.measure !== b.measure) return a.measure - b.measure
         return a.beat - b.beat
       })
-    
+
     return relevantPoints.length > 0 ? relevantPoints[relevantPoints.length - 1].bpm : 120
   }
 
   // 拍子を取得（指定した小節・拍における）
   const getTimeSignatureAt = (measure: number, beat: number): [number, number] => {
     const relevantPoints = timingPoints.value
-      .filter(tp => tp.measure < measure || (tp.measure === measure && tp.beat <= beat))
+      .filter((tp) => tp.measure < measure || (tp.measure === measure && tp.beat <= beat))
       .sort((a, b) => {
         if (a.measure !== b.measure) return a.measure - b.measure
         return a.beat - b.beat
       })
-    
-    return relevantPoints.length > 0 ? relevantPoints[relevantPoints.length - 1].timeSignature : [4, 4]
+
+    return relevantPoints.length > 0
+      ? relevantPoints[relevantPoints.length - 1].timeSignature
+      : [4, 4]
   }
 
   // アクション
@@ -107,13 +112,13 @@ export const useChartStore = defineStore('chart', () => {
 
   const addTimingPoint = (timingPoint: TimingPoint) => {
     console.log('Adding timing point:', timingPoint)
-    
+
     timingPoints.value.push(timingPoint)
     timingPoints.value.sort((a, b) => {
       if (a.measure !== b.measure) return a.measure - b.measure
       return a.beat - b.beat
     })
-    
+
     console.log('Result timing points:', timingPoints.value)
   }
 
@@ -165,6 +170,6 @@ export const useChartStore = defineStore('chart', () => {
     removeTimingPoint,
     clearNotes,
     loadChartData,
-    exportChartData
+    exportChartData,
   }
 })

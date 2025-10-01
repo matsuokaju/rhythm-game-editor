@@ -3,64 +3,6 @@
     <!-- コントロールパネル（左側） -->
     <div class="control-panel">
 
-      
-      <div class="zoom-controls">
-        <h3>ズーム</h3>
-        <div class="zoom-slider-container">
-          <span class="zoom-value">{{ Math.round(zoom * 100) }}%</span>
-          <input 
-            type="range" 
-            min="50" 
-            max="200" 
-            step="10" 
-            :value="Math.round(zoom * 100)" 
-            @input="handleZoomChange"
-            class="zoom-slider"
-          />
-          <div class="zoom-labels">
-            <span>50%</span>
-            <span>200%</span>
-          </div>
-        </div>
-      </div>
-      
-      <div class="audio-controls">
-        <h3>音声</h3>
-        <input 
-          type="file" 
-          accept="audio/*" 
-          @change="handleAudioFileChange"
-          ref="audioFileInput"
-          class="audio-file-input"
-        />
-        <div v-if="audioFile" class="audio-info">
-          {{ audioFile.name }}
-        </div>
-        <div class="playback-controls">
-          <button @click="playAudio" :disabled="!audioFile" class="play-btn">
-            {{ isPlaying ? '⏸️' : '▶️' }}
-          </button>
-          <button @click="stopAudio" :disabled="!audioFile" class="stop-btn">
-            ⏹️
-          </button>
-          <span v-if="audioFile" class="time-display">
-            {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
-          </span>
-        </div>
-        <div v-if="audioFile" class="volume-controls">
-          <label>音量: {{ Math.round(volume * 100) }}%</label>
-          <input 
-            type="range" 
-            min="0" 
-            max="100" 
-            step="5" 
-            :value="Math.round(volume * 100)" 
-            @input="handleVolumeChange"
-            class="volume-slider"
-          />
-        </div>
-      </div>
-
       <div class="edit-type-toggle">
         <h3>編集対象</h3>
         <div class="toggle-buttons">
@@ -238,8 +180,12 @@
 
     <!-- コントロールパネル（右側） -->
     <div class="control-panel control-panel-right">
+      <!-- 楽曲情報 -->
       <div class="info-section">
-        <h3>楽曲設定</h3>
+        <h3>楽曲情報</h3>
+        <button @click="openSongInfoDialog" class="song-info-btn">
+          基本情報設定
+        </button>
         <div class="song-setting">
           <label>総小節数:</label>
           <input 
@@ -262,6 +208,64 @@
         </div>
       </div>
       
+      <!-- 音声 -->
+      <div class="audio-controls">
+        <h3>音声</h3>
+        <div v-if="chartStore.songInfo.audioFile" class="audio-info">
+          <div class="current-audio">
+            {{ chartStore.songInfo.audioFile }}
+          </div>
+          <div v-if="chartStore.songInfo.title !== '新しい楽曲'" class="song-title">
+            {{ chartStore.songInfo.title }} - {{ chartStore.songInfo.artist }}
+          </div>
+        </div>
+        <div class="playback-controls">
+          <button @click="playAudio" :disabled="!audioElement" class="play-btn">
+            {{ isPlaying ? '⏸️' : '▶️' }}
+          </button>
+          <button @click="stopAudio" :disabled="!audioElement" class="stop-btn">
+            ⏹️
+          </button>
+          <span v-if="audioElement" class="time-display">
+            {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
+          </span>
+        </div>
+        <div v-if="audioElement" class="volume-controls">
+          <label>音量: {{ Math.round(volume * 100) }}%</label>
+          <input 
+            type="range" 
+            min="0" 
+            max="100" 
+            step="5" 
+            :value="Math.round(volume * 100)" 
+            @input="handleVolumeChange"
+            class="volume-slider"
+          />
+        </div>
+      </div>
+      
+      <!-- ズーム -->
+      <div class="zoom-controls">
+        <h3>ズーム</h3>
+        <div class="zoom-slider-container">
+          <span class="zoom-value">{{ Math.round(zoom * 100) }}%</span>
+          <input 
+            type="range" 
+            min="50" 
+            max="200" 
+            step="10" 
+            :value="Math.round(zoom * 100)" 
+            @input="handleZoomChange"
+            class="zoom-slider"
+          />
+          <div class="zoom-labels">
+            <span>50%</span>
+            <span>200%</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- 情報 -->
       <div class="info-section">
         <h3>情報</h3>
         <div class="measure-info">
@@ -276,15 +280,18 @@
           <div>再生位置:</div>
           <div>{{ playbackPosition.measure }}小節 {{ Math.round(playbackPosition.beat * 4) / 4 }}拍</div>
         </div>
-
       </div>
     </div>
 
     <!-- タイミング設定ダイアログ -->
-    <div v-if="showTimingDialog" class="timing-dialog-overlay" @click="closeTimingDialog">
-      <div class="timing-dialog" @click.stop>
-        <h3>タイミング設定</h3>
-        <div class="dialog-content">
+    <div v-if="showTimingDialog" class="dialog-overlay" @click="closeTimingDialog">
+      <div class="dialog-content" @click.stop>
+        <div class="dialog-header">
+          <h2>タイミング設定</h2>
+          <button @click="closeTimingDialog" class="close-btn">×</button>
+        </div>
+        
+        <div class="dialog-body">
           <div class="position-info">
             <span>位置: {{ timingDialogPosition?.measure }}小節 {{ (timingDialogPosition?.beat || 0).toFixed(3) }}拍目</span>
           </div>
@@ -302,50 +309,134 @@
           
           <div class="timing-input-group">
             <label>拍子:</label>
-            <input 
-              type="number" 
-              v-model.number="dialogTimeSignatureNumerator" 
-              min="1" 
-              max="16" 
-              class="timing-input timing-input-small"
-              :disabled="(timingDialogPosition?.beat || 0) !== 0"
-            />
-            <span>/</span>
-            <select 
-              v-model.number="dialogTimeSignatureDenominator" 
-              class="timing-select"
-              :disabled="(timingDialogPosition?.beat || 0) !== 0"
-            >
-              <option value="2">2</option>
-              <option value="4">4</option>
-              <option value="8">8</option>
-              <option value="16">16</option>
-            </select>
+            <div class="time-signature-input">
+              <input 
+                type="number" 
+                v-model.number="dialogTimeSignatureNumerator" 
+                min="1" 
+                max="16" 
+                class="timing-input timing-input-small"
+                :disabled="(timingDialogPosition?.beat || 0) !== 0"
+              />
+              <span class="slash">/</span>
+              <select 
+                v-model.number="dialogTimeSignatureDenominator" 
+                class="timing-select"
+                :disabled="(timingDialogPosition?.beat || 0) !== 0"
+              >
+                <option value="2">2</option>
+                <option value="4">4</option>
+                <option value="8">8</option>
+                <option value="16">16</option>
+              </select>
+            </div>
           </div>
           
           <div v-if="(timingDialogPosition?.beat || 0) !== 0" class="beat-restriction-info">
             ※ 拍子変更は0拍目でのみ可能です
           </div>
-          
-          <div class="dialog-buttons">
-            <button @click="applyTimingPoint" class="apply-btn">適用</button>
-            <button @click="closeTimingDialog" class="cancel-btn">キャンセル</button>
-          </div>
+        </div>
+        
+        <div class="dialog-footer">
+          <button @click="applyTimingPoint" class="apply-btn">適用</button>
+          <button @click="closeTimingDialog" class="cancel-btn">キャンセル</button>
         </div>
       </div>  
+    </div>
+  </div>
+
+  <!-- 楽曲設定ダイアログ -->
+  <div v-if="showSongInfoDialog" class="dialog-overlay">
+    <div class="dialog-content">
+      <div class="dialog-header">
+        <h2>楽曲基本情報設定</h2>
+        <button @click="closeSongInfoDialog" class="close-btn">×</button>
+      </div>
+      <div class="dialog-body">
+        <div class="form-group">
+          <label>タイトル:</label>
+          <input v-model="tempSongInfo.title" type="text" />
+        </div>
+        <div class="form-group">
+          <label>アーティスト:</label>
+          <input v-model="tempSongInfo.artist" type="text" />
+        </div>
+        <div class="form-group">
+          <label>音声ファイル:</label>
+          <div class="file-input-group">
+            <input v-model="tempSongInfo.audioFile" type="text" placeholder="例: test.mp3" readonly class="file-path-input" />
+            <button @click="selectAudioFile" type="button" class="file-select-btn">選択</button>
+          </div>
+          <input 
+            ref="audioFileInputDialog"
+            type="file" 
+            accept="audio/*" 
+            @change="handleDialogAudioFileChange"
+            class="hidden-file-input"
+          />
+        </div>
+        <div class="form-group">
+          <label>音声オフセット:</label>
+          <input v-model.number="tempSongInfo.audioOffset" type="number" step="0.01" />
+          <span class="unit">秒</span>
+        </div>
+        <div class="form-group">
+          <label>空小節数:</label>
+          <input v-model.number="tempSongInfo.emptyMeasures" type="number" min="0" />
+        </div>
+        <div class="form-group">
+          <label>総小節数:</label>
+          <input v-model.number="tempSongInfo.totalMeasures" type="number" min="1" />
+        </div>
+        <div class="form-group">
+          <label>音量:</label>
+          <input v-model.number="tempSongInfo.volume" type="number" step="0.1" min="0" max="1" />
+        </div>
+        <div class="form-group">
+          <label>難易度:</label>
+          <select v-model="tempSongInfo.difficulty">
+            <option>Easy</option>
+            <option>Normal</option>
+            <option>Hard</option>
+            <option>Expert</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>レベル:</label>
+          <input v-model.number="tempSongInfo.level" type="number" min="1" max="20" />
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <button @click="saveSongInfo" class="save-btn">保存</button>
+        <button @click="closeSongInfoDialog" class="cancel-btn">キャンセル</button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { useChartStore, type Note } from '../stores/chart'
+import { useChartStore, type Note, type SongInfo } from '../stores/chart'
 
 const chartStore = useChartStore()
 
+// 楽曲設定ダイアログの状態
+const showSongInfoDialog = ref(false)
+const audioFileInputDialog = ref<HTMLInputElement | null>(null)
+const tempSongInfo = ref<SongInfo>({
+  title: '',
+  artist: '',
+  audioFile: '',
+  audioOffset: 0,
+  emptyMeasures: 1,
+  totalMeasures: 100,
+  volume: 0.5,
+  difficulty: 'Normal',
+  level: 1
+})
+
 // 参照
 const timelineContainer = ref<HTMLElement>()
-const audioFileInput = ref<HTMLInputElement>()
 
 // 表示設定
 const laneWidth = 40 // 80から40に変更（半分）
@@ -354,12 +445,15 @@ const zoom = ref(1) // 100%（50%～200%の範囲）
 const scrollTop = ref(0)
 
 // 音声関連
-const audioFile = ref<File | null>(null)
 const audioElement = ref<HTMLAudioElement | null>(null)
 const isPlaying = ref(false)
 const currentTime = ref(0)
 const duration = ref(0)
 const volume = ref(0.5) // 音量（0.0 - 1.0）
+
+// タイムライン再生制御用
+const playbackStartTime = ref(0) // 再生開始時のタイムスタンプ
+const playbackStartPosition = ref({ measure: 1, beat: 0 }) // 再生開始時の楽譜位置
 
 // SE関連
 const tickSoundElement = ref<HTMLAudioElement | null>(null)
@@ -763,64 +857,11 @@ const handleVolumeChange = (event: Event) => {
   }
 }
 
-// 音声ファイル読み込み
-const handleAudioFileChange = (event: Event) => {
-  const target = event.target as HTMLInputElement
-  const file = target.files?.[0]
-  
-  if (file) {
-    audioFile.value = file
-    
-    // 新しい音声ファイル読み込み時に再生済みノートをリセット
-    resetPlayedNotes()
-    
-    // HTMLAudioElementを作成
-    audioElement.value = new Audio()
-    audioElement.value.src = URL.createObjectURL(file)
-    audioElement.value.volume = volume.value // 初期音量を設定
-    
-    // イベントリスナーを設定
-    audioElement.value.addEventListener('loadedmetadata', () => {
-      if (audioElement.value) {
-        duration.value = audioElement.value.duration
-      }
-    })
-    
-    audioElement.value.addEventListener('timeupdate', () => {
-      if (audioElement.value) {
-        currentTime.value = audioElement.value.currentTime
-        updatePlaybackPosition()
-      }
-    })
-    
-    // より頻繁な位置更新のためのrequestAnimationFrameループ
-    const startSmoothUpdate = () => {
-      if (isPlaying.value && audioElement.value) {
-        currentTime.value = audioElement.value.currentTime
-        updatePlaybackPosition()
-      }
-      if (isPlaying.value) {
-        requestAnimationFrame(startSmoothUpdate)
-      }
-    }
-    
-    audioElement.value.addEventListener('play', () => {
-      // 再生開始時にリセット（確実にリセットするため）
-      console.log('Audio play event - resetting played notes')
-      resetPlayedNotes()
-      startSmoothUpdate()
-    })
-    
-    audioElement.value.addEventListener('pause', () => {
-      // 一時停止時は何もしない（requestAnimationFrameループが自動的に停止）
-    })
-    
-    audioElement.value.addEventListener('ended', () => {
-      isPlaying.value = false
-      // 再生終了時にもリセット
-      console.log('Audio ended - resetting played notes')
-      resetPlayedNotes()
-    })
+// より頻繁な位置更新のためのrequestAnimationFrameループ
+const startSmoothUpdate = () => {
+  if (isPlaying.value) {
+    updatePlaybackPosition()
+    requestAnimationFrame(startSmoothUpdate)
   }
 }
 
@@ -836,14 +877,48 @@ const playAudio = () => {
     console.log('Starting playback - resetting all played notes')
     resetPlayedNotes()
     
-    // 再生位置から開始
+    // 再生開始情報を記録
+    playbackStartTime.value = Date.now()
     if (playbackPosition.value) {
+      playbackStartPosition.value = { ...playbackPosition.value }
       const timeAtPosition = getTimeFromPosition(playbackPosition.value.measure, playbackPosition.value.beat)
-      audioElement.value.currentTime = timeAtPosition
+      const offsetTime = timeAtPosition - chartStore.songInfo.audioOffset
+      
+      // 音声が開始されるべき時間帯かどうかを判定
+      if (offsetTime >= 0) {
+        // 音声が開始されるべき時間帯：即座に再生開始
+        audioElement.value.currentTime = offsetTime
+        audioElement.value.play()
+      } else {
+        // 音声がまだ開始されない時間帯：音声は再生せず、タイマーで遅延開始
+        audioElement.value.currentTime = 0
+        setTimeout(() => {
+          if (isPlaying.value && audioElement.value) {
+            audioElement.value.play()
+          }
+        }, Math.abs(offsetTime) * 1000)
+      }
+    } else {
+      playbackStartPosition.value = { measure: 1, beat: 0 }
+      // 再生位置が設定されていない場合は、オフセットのみ適用
+      const offsetTime = -chartStore.songInfo.audioOffset
+      if (offsetTime >= 0) {
+        audioElement.value.currentTime = offsetTime
+        audioElement.value.play()
+      } else {
+        audioElement.value.currentTime = 0
+        setTimeout(() => {
+          if (isPlaying.value && audioElement.value) {
+            audioElement.value.play()
+          }
+        }, Math.abs(offsetTime) * 1000)
+      }
     }
     
-    audioElement.value.play()
     isPlaying.value = true
+    
+    // タイムライン更新を開始（音声再生前でも動作）
+    startSmoothUpdate()
   }
 }
 
@@ -853,8 +928,14 @@ const stopAudio = () => {
   
   console.log('Stopping audio - resetting played notes')
   audioElement.value.pause()
-  audioElement.value.currentTime = 0
+  // 停止時は楽譜の開始位置（1小節0拍）に対応する音声位置にセット
+  audioElement.value.currentTime = Math.max(0, -chartStore.songInfo.audioOffset)
   isPlaying.value = false
+  
+  // 再生開始情報をリセット
+  playbackStartTime.value = 0
+  playbackStartPosition.value = { measure: 1, beat: 0 }
+  
   resetPlayedNotes() // 再生済みノートをリセット
 }
 
@@ -956,9 +1037,14 @@ const resetPlayedNotes = () => {
 const updatePlaybackPosition = () => {
   if (!isPlaying.value || !audioElement.value) return
   
-  // 現在の時間から小節・拍を逆算（BPM変化を考慮）
-  const currentSeconds = audioElement.value.currentTime
-  const position = getPositionFromTime(currentSeconds)
+  // 実際の経過時間を計算
+  const elapsedRealTime = (Date.now() - playbackStartTime.value) / 1000
+  // 開始位置からの経過時間を楽譜時間に変換
+  const startTime = getTimeFromPosition(playbackStartPosition.value.measure, playbackStartPosition.value.beat)
+  const currentScoreTime = startTime + elapsedRealTime
+  
+  // 楽譜時間から位置を計算（オフセット適用なし、純粋な楽譜時間）
+  const position = getPositionFromScoreTime(currentScoreTime)
   
   if (!position) return
   
@@ -985,8 +1071,8 @@ const updatePlaybackPosition = () => {
   }
 }
 
-// 時間から小節・拍を逆算する関数
-const getPositionFromTime = (targetTime: number) => {
+// 楽譜時間から小節・拍を逆算する関数（オフセット適用なし）
+const getPositionFromScoreTime = (targetTime: number) => {
   let currentTime = 0
   let currentMeasure = 1
   let currentBeat = 0
@@ -1029,9 +1115,10 @@ const getPositionFromTime = (targetTime: number) => {
     currentBeat = nextBeat
   }
   
+  // 最後の位置を返す
   return {
     measure: currentMeasure,
-    beat: Math.max(0, currentBeat)
+    beat: currentBeat
   }
 }
 
@@ -1732,6 +1819,99 @@ const handleGlobalClick = (event: MouseEvent) => {
   console.log('Cleared note selection (global click outside timeline)')
 }
 
+// 楽曲設定ダイアログ関数
+const openSongInfoDialog = () => {
+  // 現在の楽曲情報をコピー
+  tempSongInfo.value = { ...chartStore.songInfo }
+  
+  // 現在の音量設定を反映
+  tempSongInfo.value.volume = volume.value
+  
+  showSongInfoDialog.value = true
+}
+
+const closeSongInfoDialog = () => {
+  showSongInfoDialog.value = false
+}
+
+const saveSongInfo = () => {
+  // 楽曲情報を保存
+  chartStore.setSongInfo(tempSongInfo.value)
+  
+  // 音量設定を音声再生機能に反映
+  volume.value = tempSongInfo.value.volume
+  if (audioElement.value) {
+    audioElement.value.volume = tempSongInfo.value.volume
+  }
+  
+  showSongInfoDialog.value = false
+  console.log('Saved song info:', tempSongInfo.value)
+}
+
+// ダイアログの音声ファイル選択
+const selectAudioFile = () => {
+  audioFileInputDialog.value?.click()
+}
+
+// 音声要素のセットアップ
+const setupAudioElement = (file: File) => {
+  // 新しい音声ファイル読み込み時に再生済みノートをリセット
+  resetPlayedNotes()
+  
+  // HTMLAudioElementを作成
+  audioElement.value = new Audio()
+  audioElement.value.src = URL.createObjectURL(file)
+  audioElement.value.volume = volume.value // 初期音量を設定
+  
+  // イベントリスナーを設定
+  audioElement.value.addEventListener('loadedmetadata', () => {
+    if (audioElement.value) {
+      duration.value = audioElement.value.duration
+    }
+  })
+  
+  audioElement.value.addEventListener('timeupdate', () => {
+    if (audioElement.value) {
+      currentTime.value = audioElement.value.currentTime
+      updatePlaybackPosition()
+    }
+  })
+  
+
+  
+  audioElement.value.addEventListener('play', () => {
+    // 再生開始時にリセット（確実にリセットするため）
+    console.log('Audio play event - resetting played notes')
+    resetPlayedNotes()
+  })
+  
+  audioElement.value.addEventListener('pause', () => {
+    // 一時停止時は何もしない（requestAnimationFrameループが自動的に停止）
+  })
+  
+  audioElement.value.addEventListener('ended', () => {
+    isPlaying.value = false
+    // 再生終了時にもリセット
+    console.log('Audio ended - resetting played notes')
+    resetPlayedNotes()
+  })
+}
+
+const handleDialogAudioFileChange = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  
+  if (file) {
+    // ファイル名を設定
+    tempSongInfo.value.audioFile = file.name
+    
+    // 音声ファイルを即座に読み込み
+    setupAudioElement(file)
+    
+    console.log('Selected audio file for dialog:', file.name)
+  }
+}
+
 onMounted(() => {
   if (timelineContainer.value) {
     timelineContainer.value.addEventListener('scroll', handleScroll)
@@ -2186,7 +2366,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
   gap: 10px;
 }
 
@@ -2323,6 +2502,17 @@ onUnmounted(() => {
   font-size: 11px;
   color: #ccc;
   word-break: break-all;
+}
+
+.current-audio {
+  font-weight: bold;
+  color: #fff;
+}
+
+.song-title {
+  font-size: 10px;
+  color: #999;
+  margin-top: 2px;
 }
 
 .playback-controls {
@@ -2645,39 +2835,7 @@ onUnmounted(() => {
   }
 }
 
-/* タイミングダイアログのスタイル */
-.timing-dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-}
-
-.timing-dialog {
-  background-color: #2a2a2a;
-  border-radius: 8px;
-  padding: 20px;
-  min-width: 350px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-}
-
-.timing-dialog h3 {
-  margin: 0 0 20px 0;
-  color: #ffffff;
-  text-align: center;
-}
-
-.dialog-content {
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-}
+/* タイミングダイアログ固有のスタイル */
 
 .position-info {
   background-color: #1a1a1a;
@@ -2686,17 +2844,33 @@ onUnmounted(() => {
   text-align: center;
   color: #cccccc;
   font-size: 14px;
+  margin-bottom: 16px;
 }
 
 .timing-input-group {
   display: flex;
   align-items: center;
   gap: 10px;
+  margin-bottom: 16px;
 }
 
 .timing-input-group label {
   min-width: 60px;
   color: #cccccc;
+}
+
+.time-signature-input {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+}
+
+.slash {
+  color: #cccccc;
+  font-size: 16px;
+  font-weight: bold;
+  padding: 0 5px;
 }
 
 .timing-input {
@@ -2739,40 +2913,10 @@ onUnmounted(() => {
   color: #ffa500;
   text-align: center;
   border-left: 3px solid #ffa500;
+  margin-bottom: 16px;
 }
 
-.dialog-buttons {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-  margin-top: 10px;
-}
 
-.apply-btn, .cancel-btn {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.apply-btn {
-  background-color: #007acc;
-  color: white;
-}
-
-.apply-btn:hover {
-  background-color: #005a9e;
-}
-
-.cancel-btn {
-  background-color: #666;
-  color: white;
-}
-
-.cancel-btn:hover {
-  background-color: #555;
-}
 
 /* タイミングラベルのインタラクション */
 .timing-change-label.clickable {
@@ -2792,5 +2936,226 @@ onUnmounted(() => {
 .timing-change-label.delete-mode:hover .timing-change-content {
   background-color: #d73a49;
   border-color: #d73a49;
+}
+
+/* 楽曲設定セクション */
+.song-settings {
+  margin-bottom: 20px;
+}
+
+.song-info-btn {
+  background: #4CAF50;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  width: 100%;
+}
+
+.song-info-btn:hover {
+  background: #45a049;
+}
+
+/* ダイアログスタイル */
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.dialog-content {
+  background: #2a2a2a;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow: auto;
+  border: 1px solid #444;
+}
+
+.dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #444;
+}
+
+.dialog-header h2 {
+  margin: 0;
+  color: #fff;
+  font-size: 18px;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: #ccc;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-btn:hover {
+  color: #fff;
+}
+
+.dialog-body {
+  padding: 20px;
+}
+
+.form-group {
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.form-group label {
+  color: #ccc;
+  min-width: 120px;
+  font-size: 14px;
+}
+
+.form-group input,
+.form-group select {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #333;
+  color: #fff;
+  font-size: 14px;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: #007acc;
+}
+
+/* ファイル選択用スタイル */
+.file-input-group {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+}
+
+.file-path-input {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #333;
+  color: #fff;
+  font-size: 14px;
+  cursor: default;
+}
+
+.file-select-btn {
+  background: #007acc;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.file-select-btn:hover {
+  background: #005999;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
+.unit {
+  color: #999;
+  font-size: 12px;
+  min-width: auto;
+}
+
+.dialog-footer {
+  padding: 16px 20px;
+  border-top: 1px solid #444;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.save-btn {
+  background: #007acc;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.save-btn:hover {
+  background: #005999;
+}
+
+.cancel-btn {
+  background: #666;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.cancel-btn:hover {
+  background: #555;
+}
+
+.apply-btn {
+  background: #007acc;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.apply-btn:hover {
+  background: #005999;
+}
+
+/* レスポンシブ対応 */
+@media (max-width: 768px) {
+  .dialog-content {
+    width: 95%;
+    margin: 10px;
+  }
+  
+  .form-group {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .form-group label {
+    min-width: auto;
+    margin-bottom: 4px;
+  }
 }
 </style>
