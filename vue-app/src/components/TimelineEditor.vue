@@ -202,9 +202,16 @@
             v-for="(note, index) in visibleNotes"
             :key="`note-${index}`"
             class="note"
-            :class="[`note-${note.type}`, { selected: isNoteSelected(index) }]"
+            :class="[
+              `note-${note.type}`, 
+              { 
+                selected: isNoteSelected(index),
+                overlapping: !isNoteSelected(index) && isNoteOverlapping(getActualNoteIndex(index))
+              }
+            ]"
             :style="getNoteStyle(note)"
             @click="handleNoteClick($event, index)"
+            @contextmenu="handleNoteRightClick($event, index)"
           >
             <div v-if="note.type === 'hold'" class="hold-tail" :style="getHoldTailStyle()"></div>
           </div>
@@ -645,6 +652,76 @@ const getNoteY = (measure: number, beat: number) => {
   // 下から上に流れるように反転（総高さから引く）
   // ノートの中央が拍位置に来るように、ノートの高さの半分（4px）を引く
   return totalHeight.value - y - 4
+}
+
+// visibleNotesのインデックスから実際のノートインデックスを取得
+const getActualNoteIndex = (visibleIndex: number) => {
+  const visibleNote = visibleNotes.value[visibleIndex]
+  if (!visibleNote) return -1
+  
+  return chartStore.notes.findIndex(note => 
+    note.measure === visibleNote.measure &&
+    note.beat === visibleNote.beat &&
+    note.lane === visibleNote.lane &&
+    note.type === visibleNote.type &&
+    note.duration === visibleNote.duration
+  )
+}
+
+// ノートの重なり検出
+const isNoteOverlapping = (noteIndex: number) => {
+  const currentNote = chartStore.notes[noteIndex]
+  if (!currentNote) return false
+  
+  // 同じノートとの比較は除外
+  for (let i = 0; i < chartStore.notes.length; i++) {
+    if (i === noteIndex) continue
+    
+    const otherNote = chartStore.notes[i]
+    
+    // 同じレーンでない場合はスキップ
+    if (currentNote.lane !== otherNote.lane) continue
+    
+    // 現在のノートとチェック対象ノートの絶対的な拍位置を計算
+    const currentAbsoluteBeat = (currentNote.measure - 1) * 4 + currentNote.beat
+    const otherAbsoluteBeat = (otherNote.measure - 1) * 4 + otherNote.beat
+    
+    // タップノーツ同士の場合：位置が完全に重なった場合
+    if (currentNote.type === 'tap' && otherNote.type === 'tap') {
+      if (Math.abs(currentAbsoluteBeat - otherAbsoluteBeat) < 0.01) {
+        return true
+      }
+    }
+    
+    // ホールドノーツ同士の場合：少しでも重なっている部分があれば
+    else if (currentNote.type === 'hold' && otherNote.type === 'hold') {
+      const currentEndBeat = currentAbsoluteBeat + (currentNote.duration || 0)
+      const otherEndBeat = otherAbsoluteBeat + (otherNote.duration || 0)
+      
+      // 重なり判定：一方の開始が他方の終了より前で、一方の終了が他方の開始より後
+      if (currentAbsoluteBeat < otherEndBeat && currentEndBeat > otherAbsoluteBeat) {
+        return true
+      }
+    }
+    
+    // タップノーツとホールドノーツの場合
+    else if (currentNote.type === 'tap' && otherNote.type === 'hold') {
+      const otherEndBeat = otherAbsoluteBeat + (otherNote.duration || 0)
+      
+      // タップノーツがホールドノーツの範囲内にある場合
+      if (currentAbsoluteBeat >= otherAbsoluteBeat && currentAbsoluteBeat <= otherEndBeat) {
+        return true
+      }
+    }
+    
+    // ホールドノーツとタップノーツの場合（タップノーツを赤くするため、ホールド側は赤くしない）
+    else if (currentNote.type === 'hold' && otherNote.type === 'tap') {
+      // このケースでは現在のホールドノーツは赤くしない
+      // （タップノーツ側で判定される）
+    }
+  }
+  
+  return false
 }
 
 // 再生位置ライン用のY座標計算（正確な拍位置）
@@ -1209,9 +1286,35 @@ const handleNoteClick = (event: MouseEvent, index: number) => {
     
     if (actualIndex !== -1) {
       chartStore.removeNote(actualIndex)
-      // 削除されたノートを選択状態からも除去
-      selectedNotes.value.delete(actualIndex)
+      // 削除時は選択状態を完全にクリア
+      selectedNotes.value.clear()
+      console.log('Note deleted in delete mode, cleared all selections')
     }
+  }
+}
+
+// ノート右クリック処理（削除）
+const handleNoteRightClick = (event: MouseEvent, index: number) => {
+  event.preventDefault() // コンテキストメニューを表示しない
+  event.stopPropagation() // バブリングを防ぐ
+  
+  // 配置モードでのみ右クリック削除を有効にする
+  if (editType.value !== 'notes' || actionMode.value !== 'edit') return
+  
+  const noteToDelete = visibleNotes.value[index]
+  const actualIndex = chartStore.notes.findIndex(note => 
+    note.measure === noteToDelete.measure &&
+    note.beat === noteToDelete.beat &&
+    note.lane === noteToDelete.lane &&
+    note.type === noteToDelete.type
+  )
+  
+  if (actualIndex !== -1) {
+    chartStore.removeNote(actualIndex)
+    // 右クリック削除時は選択状態を完全にクリア
+    selectedNotes.value.clear()
+    console.log('Note deleted by right-click:', noteToDelete)
+    console.log('Cleared all note selections')
   }
 }
 
@@ -1338,6 +1441,12 @@ const handleMouseDown = (event: MouseEvent) => {
   if (editType.value === 'notes') {
     if (actionMode.value === 'edit') {
       // ノート配置（従来の処理）
+      // 配置モードでも空白クリック時は選択をクリア
+      if (!event.ctrlKey && !event.metaKey) {
+        selectedNotes.value.clear()
+        console.log('Cleared note selection (edit mode)')
+      }
+      
       isDragging.value = true
       dragStartTime.value = Date.now()
       dragStartPosition.value = position
@@ -1425,6 +1534,19 @@ const handleMouseUp = () => {
   chartStore.addNote(addedNote)
   console.log('Added note:', addedNote)
   
+  // 追加されたノートを選択状態にする（ソート後の正確なインデックスを取得）
+  const noteIndex = chartStore.notes.findIndex(note => 
+    note.measure === addedNote.measure &&
+    note.beat === addedNote.beat &&
+    note.lane === addedNote.lane &&
+    note.type === addedNote.type &&
+    note.duration === addedNote.duration
+  )
+  selectedNotes.value.clear()
+  if (noteIndex !== -1) {
+    selectedNotes.value.add(noteIndex)
+  }
+  
   // 自動拡張：必要に応じて総小節数を増加
   autoExpandMeasures(addedNote.measure)
   
@@ -1454,6 +1576,162 @@ const handleScroll = () => {
   }
 }
 
+// キーボードイベントハンドラー
+const handleKeyDown = (event: KeyboardEvent) => {
+  // 入力フィールドがフォーカスされている場合は何もしない
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
+  
+  // タブキーでの操作切り替え
+  if (event.key === 'Tab') {
+    event.preventDefault()
+    
+    if (event.shiftKey) {
+      // Shift + Tab: 編集対象を切り替え
+      if (editType.value === 'timing') {
+        setEditType('notes')
+      } else {
+        setEditType('timing')
+      }
+      console.log('Switched edit type to:', editType.value)
+    } else {
+      // Tab: 操作モードの切り替え
+      if (editType.value === 'notes') {
+        // ノーツ操作の切り替え（選択→配置/設定→削除→選択...）
+        if (actionMode.value === 'select') {
+          setActionMode('edit')
+        } else if (actionMode.value === 'edit') {
+          setActionMode('delete')
+        } else if (actionMode.value === 'delete') {
+          setActionMode('select')
+        }
+        console.log('Switched notes action mode to:', actionMode.value)
+      } else if (editType.value === 'timing') {
+        // タイミング操作の切り替え（選択→配置/設定→削除→選択...）
+        if (actionMode.value === 'select') {
+          setActionMode('edit')
+        } else if (actionMode.value === 'edit') {
+          setActionMode('delete')
+        } else if (actionMode.value === 'delete') {
+          setActionMode('select')
+        }
+        console.log('Switched timing action mode to:', actionMode.value)
+      }
+    }
+    return
+  }
+  
+  // 選択されたノートがない場合、矢印キーとデリートキー以外は何もしない
+  if (selectedNotes.value.size === 0 && !['ArrowUp', 'ArrowDown', 'Delete', 'Backspace'].includes(event.key)) return
+  
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    // 選択されたノートがない場合は何もしない
+    if (selectedNotes.value.size === 0) return
+    
+    event.preventDefault()
+    
+    // 選択されたノートを削除（インデックスの大きい順に削除）
+    const sortedIndices = Array.from(selectedNotes.value).sort((a, b) => b - a)
+    sortedIndices.forEach(index => {
+      chartStore.removeNote(index)
+    })
+    
+    // 選択状態をクリア
+    selectedNotes.value.clear()
+    return
+  }
+  
+  if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+    // 選択されたノートがない場合は何もしない
+    if (selectedNotes.value.size === 0) return
+    
+    event.preventDefault()
+    
+    const gridStep = 4 / gridDivision.value // グリッド分割に基づく移動単位
+    
+    // 上矢印は時間的に後（下方向）、下矢印は時間的に前（上方向）
+    const direction = event.key === 'ArrowUp' ? 1 : -1
+    const moveAmount = gridStep * direction
+    
+    // 選択されたノートを移動
+    const notesToMove = Array.from(selectedNotes.value).map(index => chartStore.notes[index])
+    
+    notesToMove.forEach((note) => {
+      if (note) {
+        const newBeat = note.beat + moveAmount
+        
+        // 新しい小節と拍を計算
+        let newMeasure = note.measure
+        let adjustedBeat = newBeat
+        
+        // 拍が負数になった場合の処理
+        while (adjustedBeat < 0) {
+          newMeasure--
+          adjustedBeat += 4
+        }
+        
+        // 拍が4以上になった場合の処理
+        while (adjustedBeat >= 4) {
+          newMeasure++
+          adjustedBeat -= 4
+        }
+        
+        // 小節が1未満にならないように制限
+        if (newMeasure < 1) {
+          newMeasure = 1
+          adjustedBeat = 0
+        }
+        
+        // ノートを更新
+        note.measure = newMeasure
+        note.beat = adjustedBeat
+        
+        // 必要に応じて総小節数を自動拡張
+        autoExpandMeasures(newMeasure)
+      }
+    })
+    
+    // ノートの順序を正しく保つためにソート
+    chartStore.notes.sort((a, b) => {
+      if (a.measure !== b.measure) return a.measure - b.measure
+      if (a.beat !== b.beat) return a.beat - b.beat
+      return a.lane - b.lane
+    })
+    
+    // 移動後のノートを再選択（移動したノートを直接参照で選択）
+    selectedNotes.value.clear()
+    notesToMove.forEach(movedNote => {
+      const newIndex = chartStore.notes.findIndex(note => note === movedNote)
+      if (newIndex !== -1) {
+        selectedNotes.value.add(newIndex)
+      }
+    })
+  }
+}
+
+// グローバルクリックハンドラー（選択解除用）
+const handleGlobalClick = (event: MouseEvent) => {
+  // 選択されたノートがない場合は何もしない
+  if (selectedNotes.value.size === 0) return
+  
+  const target = event.target as HTMLElement
+  
+  // タイムラインコンテナ内のクリックかチェック
+  const timelineElement = timelineContainer.value
+  if (timelineElement && timelineElement.contains(target)) {
+    // タイムライン内のクリックの場合、ノートクリックかチェック
+    if (target.classList.contains('note') || target.closest('.note')) {
+      // ノートクリックの場合は何もしない（handleNoteClickで処理される）
+      return
+    }
+    // タイムライン内の空白クリックの場合は何もしない（handleMouseDownで処理される）
+    return
+  }
+  
+  // タイムライン外のクリック（コントロールパネル、余白など）の場合は選択解除
+  selectedNotes.value.clear()
+  console.log('Cleared note selection (global click outside timeline)')
+}
+
 onMounted(() => {
   if (timelineContainer.value) {
     timelineContainer.value.addEventListener('scroll', handleScroll)
@@ -1468,12 +1746,23 @@ onMounted(() => {
   // SEファイルを読み込み
   tickSoundElement.value = new Audio('/resource/tick.wav')
   tickSoundElement.value.volume = 0.3 // SEの音量を調整
+  
+  // キーボードイベントリスナーを追加
+  document.addEventListener('keydown', handleKeyDown)
+  
+  // グローバルクリックリスナーを追加（選択解除用）
+  document.addEventListener('click', handleGlobalClick)
 })
 
 onUnmounted(() => {
   if (timelineContainer.value) {
     timelineContainer.value.removeEventListener('scroll', handleScroll)
   }
+  // キーボードイベントリスナーを削除
+  document.removeEventListener('keydown', handleKeyDown)
+  
+  // グローバルクリックリスナーを削除
+  document.removeEventListener('click', handleGlobalClick)
 })
 </script>
 
@@ -1691,6 +1980,13 @@ onUnmounted(() => {
   background: #ffeb3b !important;
   border-color: #ff9800 !important;
   box-shadow: 0 0 8px rgba(255, 235, 59, 0.8);
+}
+
+/* 重なったノート（選択状態でない場合のみ） */
+.note.overlapping {
+  background: #f44336 !important;
+  border-color: #d32f2f !important;
+  box-shadow: 0 0 6px rgba(244, 67, 54, 0.6);
 }
 
 /* 再生位置ライン */
