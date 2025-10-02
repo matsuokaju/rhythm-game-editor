@@ -204,6 +204,24 @@
 
     <!-- コントロールパネル（右側） -->
     <div class="control-panel control-panel-right">
+      <!-- 譜面ファイル読み込み -->
+      <div class="info-section">
+        <h3>譜面ファイル</h3>
+        <button @click="triggerChartFileInput" class="chart-import-btn">
+          譜面データ読み込み
+        </button>
+        <button @click="exportChartData" class="chart-export-btn">
+          譜面データ書き出し
+        </button>
+        <input 
+          ref="chartFileInput"
+          type="file" 
+          accept=".json" 
+          @change="importChartData"
+          class="hidden-file-input"
+        />
+      </div>
+
       <!-- 楽曲情報 -->
       <div class="info-section">
         <h3>楽曲情報</h3>
@@ -217,16 +235,6 @@
             v-model.number="chartStore.songInfo.totalMeasures" 
             min="10" 
             max="1000" 
-            class="setting-input"
-          />
-        </div>
-        <div class="song-setting">
-          <label>空白小節:</label>
-          <input 
-            type="number" 
-            v-model.number="chartStore.songInfo.emptyMeasures" 
-            min="0" 
-            max="10" 
             class="setting-input"
           />
         </div>
@@ -384,10 +392,6 @@
           <span class="unit">秒</span>
         </div>
         <div class="form-group">
-          <label>空小節数:</label>
-          <input v-model.number="tempSongInfo.emptyMeasures" type="number" min="0" />
-        </div>
-        <div class="form-group">
           <label>総小節数:</label>
           <input v-model.number="tempSongInfo.totalMeasures" type="number" min="1" />
         </div>
@@ -415,6 +419,42 @@
       </div>
     </div>
   </div>
+
+  <!-- 音声ファイル再選択ダイアログ -->
+  <div v-if="showAudioFilePrompt" class="dialog-overlay">
+    <div class="dialog-content">
+      <div class="dialog-header">
+        <h2>音声ファイルの選択</h2>
+        <button @click="closeAudioFilePrompt" class="close-btn">×</button>
+      </div>
+      
+      <div class="dialog-body">
+        <p v-if="chartStore.songInfo.audioFile">読み込んだ譜面データには音声ファイル「{{ chartStore.songInfo.audioFile }}」が指定されています。</p>
+        <p v-else>音声ファイルが設定されていません。</p>
+        <p>JSONファイルには音声ファイルの実体が含まれていないため、音声ファイルを選択する必要があります。</p>
+        
+        <div class="form-group">
+          <label>音声ファイル:</label>
+          <div class="file-input-group">
+            <input v-model="chartStore.songInfo.audioFile" type="text" readonly class="file-path-input" placeholder="音声ファイルを選択してください" />
+            <button @click="selectAudioFileForImport" type="button" class="file-select-btn">選択</button>
+          </div>
+          <input 
+            ref="audioFileInputImport"
+            type="file" 
+            accept="audio/*" 
+            @change="handleImportAudioFileChange"
+            class="hidden-file-input"
+          />
+        </div>
+      </div>
+      
+      <div class="dialog-footer">
+        <button @click="skipAudioFile" class="cancel-btn">スキップ</button>
+        <button @click="closeAudioFilePrompt" class="save-btn">完了</button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -426,12 +466,16 @@ const chartStore = useChartStore()
 // 楽曲設定ダイアログの状態
 const showSongInfoDialog = ref(false)
 const audioFileInputDialog = ref<HTMLInputElement | null>(null)
+
+// 譜面ファイル読み込み関連
+const chartFileInput = ref<HTMLInputElement | null>(null)
+const showAudioFilePrompt = ref(false)
+const audioFileInputImport = ref<HTMLInputElement | null>(null)
 const tempSongInfo = ref<SongInfo>({
   title: '',
   artist: '',
   audioFile: '',
   audioOffset: 0,
-  emptyMeasures: 1,
   totalMeasures: 100,
   volume: 0.5,
   difficulty: 'Normal',
@@ -1851,6 +1895,107 @@ const saveSongInfo = () => {
   console.log('Saved song info:', tempSongInfo.value)
 }
 
+// 譜面ファイル読み込み関連
+const triggerChartFileInput = () => {
+  chartFileInput.value?.click()
+}
+
+const importChartData = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  
+  if (file) {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const jsonString = e.target?.result as string
+        const chartData = JSON.parse(jsonString)
+        
+        // 譜面データを読み込み
+        chartStore.loadChartData(chartData)
+        
+        // 音声ファイル名がある場合は必ず音声ファイル選択ダイアログを表示
+        // JSONからは音声ファイルの実体を読み込めないため
+        if (chartData.songInfo.audioFile) {
+          showAudioFilePrompt.value = true
+        } else {
+          // 音声ファイル名がない場合でも、音声ファイル選択を促す
+          if (confirm('音声ファイルが設定されていません。音声ファイルを選択しますか？')) {
+            showAudioFilePrompt.value = true
+          }
+        }
+        
+        console.log('Chart data imported successfully')
+      } catch (error) {
+        console.error('譜面データの読み込みに失敗しました:', error)
+        alert('譜面データの読み込みに失敗しました。ファイル形式を確認してください。')
+      }
+    }
+    reader.readAsText(file)
+  }
+  
+  // inputをリセット（同じファイルを再度選択できるように）
+  input.value = ''
+}
+
+const exportChartData = () => {
+  try {
+    // 譜面データをJSONとして出力
+    const jsonData = chartStore.exportChartData()
+    
+    // ファイル名を生成（楽曲タイトルがあればそれを使用、なければデフォルト）
+    const fileName = chartStore.songInfo.title && chartStore.songInfo.title !== '新しい楽曲' 
+      ? `${chartStore.songInfo.title}_chart.json`
+      : 'chart_data.json'
+    
+    // Blobを作成してダウンロード
+    const blob = new Blob([jsonData], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    
+    // ダウンロードリンクを作成して実行
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    
+    // メモリリークを防ぐためにURLを解放
+    URL.revokeObjectURL(url)
+    
+    console.log('Chart data exported successfully as:', fileName)
+  } catch (error) {
+    console.error('譜面データの書き出しに失敗しました:', error)
+    alert('譜面データの書き出しに失敗しました。')
+  }
+}
+
+// 音声ファイル再選択ダイアログ関連
+const closeAudioFilePrompt = () => {
+  showAudioFilePrompt.value = false
+}
+
+const selectAudioFileForImport = () => {
+  audioFileInputImport.value?.click()
+}
+
+const handleImportAudioFileChange = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  
+  if (file) {
+    setupAudioElement(file)
+    chartStore.setSongInfo({ audioFile: file.name })
+    closeAudioFilePrompt()
+  }
+}
+
+const skipAudioFile = () => {
+  chartStore.setSongInfo({ audioFile: '' })
+  closeAudioFilePrompt()
+}
+
 // ダイアログの音声ファイル選択
 const selectAudioFile = () => {
   audioFileInputDialog.value?.click()
@@ -2959,6 +3104,38 @@ onUnmounted(() => {
 
 .song-info-btn:hover {
   background: #45a049;
+}
+
+.chart-import-btn {
+  background: #2196F3;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.chart-import-btn:hover {
+  background: #1976D2;
+}
+
+.chart-export-btn {
+  background: #FF9800;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.chart-export-btn:hover {
+  background: #F57C00;
 }
 
 /* ダイアログスタイル */

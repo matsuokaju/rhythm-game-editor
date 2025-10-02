@@ -6,7 +6,6 @@ export interface SongInfo {
   artist: string
   audioFile: string
   audioOffset: number
-  emptyMeasures: number
   totalMeasures: number // 総小節数を追加
   volume: number
   difficulty: string
@@ -41,7 +40,6 @@ export const useChartStore = defineStore('chart', () => {
     artist: 'Unknown Artist',
     audioFile: '',
     audioOffset: 0,
-    emptyMeasures: 1,
     totalMeasures: 100, // デフォルト100小節
     volume: 0.5,
     difficulty: 'Normal',
