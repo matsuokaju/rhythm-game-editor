@@ -36,8 +36,8 @@ export interface ChartData {
 export const useChartStore = defineStore('chart', () => {
   // 状態
   const songInfo = ref<SongInfo>({
-    title: '新しい楽曲',
-    artist: 'Unknown Artist',
+    title: '',
+    artist: '',
     audioFile: '',
     audioOffset: 0,
     totalMeasures: 100, // デフォルト100小節
@@ -51,23 +51,6 @@ export const useChartStore = defineStore('chart', () => {
   ])
 
   const notes = ref<Note[]>([
-    // テスト用のサンプルノート
-    { measure: 1, beat: 0.0, lane: 0, type: 'hold', duration: 4.0 },
-    { measure: 1, beat: 1.0, lane: 1, type: 'tap' },
-    { measure: 1, beat: 2.0, lane: 2, type: 'tap' },
-    { measure: 1, beat: 3.0, lane: 3, type: 'tap' },
-    { measure: 2, beat: 0.0, lane: 5, type: 'hold', duration: 4.0 },
-    { measure: 2, beat: 1.0, lane: 4, type: 'tap' },
-    { measure: 2, beat: 2.0, lane: 3, type: 'tap' },
-    { measure: 2, beat: 3.0, lane: 2, type: 'tap' },
-    { measure: 3, beat: 0.0, lane: 0, type: 'hold', duration: 4.0 },
-    { measure: 3, beat: 1.0, lane: 1, type: 'tap' },
-    { measure: 3, beat: 2.0, lane: 2, type: 'tap' },
-    { measure: 3, beat: 3.0, lane: 3, type: 'tap' },
-    { measure: 4, beat: 0.0, lane: 5, type: 'hold', duration: 4.0 },
-    { measure: 4, beat: 1.0, lane: 4, type: 'tap' },
-    { measure: 4, beat: 2.0, lane: 3, type: 'tap' },
-    { measure: 4, beat: 3.0, lane: 2, type: 'tap' },
   ])
 
   // ゲッター
@@ -109,9 +92,24 @@ export const useChartStore = defineStore('chart', () => {
   }
 
   const addTimingPoint = (timingPoint: TimingPoint) => {
-    console.log('Adding timing point:', timingPoint)
+    console.log('Adding/updating timing point:', timingPoint)
 
-    timingPoints.value.push(timingPoint)
+    // 同じ位置（小節・拍）に既存のタイミングポイントがあるかチェック
+    const existingIndex = timingPoints.value.findIndex(
+      tp => tp.measure === timingPoint.measure && tp.beat === timingPoint.beat
+    )
+
+    if (existingIndex !== -1) {
+      // 既存のタイミングポイントを更新
+      console.log('Updating existing timing point at index:', existingIndex)
+      timingPoints.value[existingIndex] = timingPoint
+    } else {
+      // 新しいタイミングポイントを追加
+      console.log('Adding new timing point')
+      timingPoints.value.push(timingPoint)
+    }
+
+    // ソート
     timingPoints.value.sort((a, b) => {
       if (a.measure !== b.measure) return a.measure - b.measure
       return a.beat - b.beat
@@ -135,6 +133,20 @@ export const useChartStore = defineStore('chart', () => {
 
   const removeTimingPoint = (index: number) => {
     timingPoints.value.splice(index, 1)
+  }
+
+  // 指定した位置のタイミングポイントを取得
+  const getTimingPointAt = (measure: number, beat: number): TimingPoint | null => {
+    return timingPoints.value.find(
+      tp => tp.measure === measure && tp.beat === beat
+    ) || null
+  }
+
+  // 指定した位置にタイミングポイントが存在するかチェック
+  const hasTimingPointAt = (measure: number, beat: number): boolean => {
+    return timingPoints.value.some(
+      tp => tp.measure === measure && tp.beat === beat
+    )
   }
 
   const clearNotes = () => {
@@ -166,6 +178,8 @@ export const useChartStore = defineStore('chart', () => {
     addNote,
     removeNote,
     removeTimingPoint,
+    getTimingPointAt,
+    hasTimingPointAt,
     clearNotes,
     loadChartData,
     exportChartData,
