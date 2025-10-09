@@ -153,11 +153,19 @@
           </div>
         </div>
 
-        <!-- 再生位置ライン -->
+        <!-- 再生位置ライン（赤い線） -->
         <div
           v-if="playbackPosition"
           class="playback-line"
           :style="{ top: `${getPlaybackLineY(playbackPosition.measure, playbackPosition.beat)}px` }"
+        >
+        </div>
+
+        <!-- 現在再生中の位置ライン（黄色い線） -->
+        <div
+          v-if="isPlaying && currentPlaybackPosition"
+          class="current-playback-line"
+          :style="{ top: `${getPlaybackLineY(currentPlaybackPosition.measure, currentPlaybackPosition.beat)}px` }"
         >
         </div>
 
@@ -887,10 +895,44 @@ const getPlaybackLineY = (measure: number, beat: number) => {
 
 // 古いモード管理は削除済み（新しいeditType/actionModeシステムに置き換え）
 
-// ズーム機能
+// ズーム機能（表示中央を基準に）
 const handleZoomChange = (event: Event) => {
   const target = event.target as HTMLInputElement
-  zoom.value = parseInt(target.value) / 100
+  const newZoom = parseInt(target.value) / 100
+  
+  if (!timelineContainer.value) {
+    zoom.value = newZoom
+    return
+  }
+  
+  // 現在のスクロール位置を取得
+  const container = timelineContainer.value
+  const currentScrollTop = container.scrollTop
+  const containerHeight = container.clientHeight
+  
+  // 現在表示されている中央位置（楽譜座標）を計算
+  const centerY = currentScrollTop + containerHeight / 2
+  
+  // 現在のズーム値を保存
+  const oldZoom = zoom.value
+  
+  // 新しいズーム値を適用
+  zoom.value = newZoom
+  
+  // nextTickで新しいズーム後の座標計算を確実にする
+  nextTick(() => {
+    if (!timelineContainer.value) return
+    
+    // ズーム比率を計算
+    const zoomRatio = newZoom / oldZoom
+    
+    // 中央位置がズーム後も同じ場所に見えるように新しいスクロール位置を計算
+    const newCenterY = centerY * zoomRatio
+    const newScrollTop = newCenterY - containerHeight / 2
+    
+    // スクロール位置を調整
+    timelineContainer.value.scrollTop = Math.max(0, newScrollTop)
+  })
 }
 
 // 音量調整
@@ -982,6 +1024,9 @@ const stopAudio = () => {
   // 再生開始情報をリセット
   playbackStartTime.value = 0
   playbackStartPosition.value = { measure: 1, beat: 0 }
+  
+  // 現在の再生位置をリセット（黄色い線を消す）
+  currentPlaybackPosition.value = null
   
   resetPlayedNotes() // 再生済みノートをリセット
 }
@@ -1100,13 +1145,15 @@ const updatePlaybackPosition = () => {
     beat: position.beat
   }
   
-  // 毎フレーム位置を更新（閾値を非常に小さくして、ほぼ常に更新）
-  const oldPosition = playbackPosition.value
-  if (!oldPosition || 
-      Math.abs(newPosition.measure - oldPosition.measure) > 0 ||
-      Math.abs(newPosition.beat - oldPosition.beat) > 0.01) { // 閾値を0.1から0.01に縮小
+  // 現在の再生位置を更新（黄色い線用、毎フレーム更新）
+  const oldCurrentPosition = currentPlaybackPosition.value
+  if (!oldCurrentPosition || 
+      Math.abs(newPosition.measure - oldCurrentPosition.measure) > 0 ||
+      Math.abs(newPosition.beat - oldCurrentPosition.beat) > 0.01) { // 閾値を0.1から0.01に縮小
     
-    playbackPosition.value = newPosition
+    // 現在の再生位置のみ更新（黄色い線用）
+    // playbackPosition（赤い線）は再生開始位置として固定
+    currentPlaybackPosition.value = { ...newPosition }
     
     // ノートヒット検出とSE再生
     checkAndPlayNoteSE(newPosition)
@@ -1169,11 +1216,11 @@ const getPositionFromScoreTime = (targetTime: number) => {
   }
 }
 
-// 再生位置への完全滑らかスクロール
+// 再生位置への完全滑らかスクロール（黄色い線を追尾）
 const scrollToPlaybackPositionSmooth = () => {
-  if (!timelineContainer.value || !playbackPosition.value) return
+  if (!timelineContainer.value || !currentPlaybackPosition.value) return
   
-  const lineY = getPlaybackLineY(playbackPosition.value.measure, playbackPosition.value.beat)
+  const lineY = getPlaybackLineY(currentPlaybackPosition.value.measure, currentPlaybackPosition.value.beat)
   const containerHeight = timelineContainer.value.clientHeight
   
   // 下から上への座標系に合わせて修正
@@ -1459,6 +1506,9 @@ const playbackPosition = ref<{ measure: number; beat: number } | null>({
   measure: 1,
   beat: 0
 })
+
+// 現在の再生位置（再生中のみ表示される黄色い線）
+const currentPlaybackPosition = ref<{ measure: number; beat: number } | null>(null)
 
 
 
@@ -2317,7 +2367,7 @@ onUnmounted(() => {
   box-shadow: 0 0 6px rgba(244, 67, 54, 0.6);
 }
 
-/* 再生位置ライン */
+/* 再生位置ライン（赤い線） */
 .playback-line {
   position: absolute;
   left: 0;
@@ -2327,6 +2377,19 @@ onUnmounted(() => {
   z-index: 15;
   pointer-events: none;
   box-shadow: 0 0 6px rgba(255, 68, 68, 0.6);
+}
+
+/* 現在再生中の位置ライン（黄色い線） */
+.current-playback-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(to right, #ffeb3b, #ffc107);
+  z-index: 16;
+  pointer-events: none;
+  box-shadow: 0 0 6px rgba(255, 235, 59, 0.8);
+  transition: top 0.1s ease-out;
 }
 
 /* コントロールパネル（左側・右側共通） */
