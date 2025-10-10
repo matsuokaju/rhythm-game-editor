@@ -603,7 +603,7 @@ const copyBasePosition = ref<{ measure: number; beat: number } | null>(null)
 
 // グリッド間隔設定
 const gridDivision = ref(16) // デフォルトは16分音符（0.25拍間隔）
-const availableDivisions = [4, 6, 8, 12, 16, 24, 32] // 利用可能な分割数
+const availableDivisions = [4, 6, 8, 12, 16, 24, 32, 48, 64] // 利用可能な分割数
 
 // タイミングダイアログ
 const showTimingDialog = ref(false)
@@ -1429,7 +1429,9 @@ const getDivisionDescription = () => {
     12: '8分3連符',
     16: '16分音符',
     24: '16分3連符',
-    32: '32分音符'
+    32: '32分音符',
+    48: '32分3連符',
+    64: '64分音符'
   }
   const beatInterval = 4 / gridDivision.value
   return `${noteNames[gridDivision.value]} (${beatInterval.toFixed(3)}拍間隔)`
