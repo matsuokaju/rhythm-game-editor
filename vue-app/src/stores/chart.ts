@@ -53,6 +53,46 @@ export const useChartStore = defineStore('chart', () => {
   const notes = ref<Note[]>([
   ])
 
+  // アンドゥ・リドゥ履歴管理
+  interface HistoryState {
+    songInfo: SongInfo
+    timingPoints: TimingPoint[]
+    notes: Note[]
+  }
+
+  const history = ref<HistoryState[]>([])
+  const historyIndex = ref(-1)
+  const maxHistorySize = 50 // 最大履歴数
+  const skipHistorySaving = ref(false) // 履歴保存を一時的に無効化するフラグ
+
+  // 現在の状態を履歴に保存
+  const saveToHistory = () => {
+    if (skipHistorySaving.value) return
+    const currentState: HistoryState = {
+      songInfo: JSON.parse(JSON.stringify(songInfo.value)),
+      timingPoints: JSON.parse(JSON.stringify(timingPoints.value)),
+      notes: JSON.parse(JSON.stringify(notes.value))
+    }
+
+    // 現在のインデックス以降の履歴を削除（新しい操作時）
+    if (historyIndex.value < history.value.length - 1) {
+      history.value = history.value.slice(0, historyIndex.value + 1)
+    }
+
+    // 新しい状態を追加
+    history.value.push(currentState)
+    historyIndex.value = history.value.length - 1
+
+    // 履歴サイズ制限
+    if (history.value.length > maxHistorySize) {
+      history.value = history.value.slice(-maxHistorySize)
+      historyIndex.value = history.value.length - 1
+    }
+  }
+
+  // 初期状態を履歴に保存
+  saveToHistory()
+
   // ゲッター
   const chartData = computed<ChartData>(() => ({
     songInfo: songInfo.value,
@@ -116,6 +156,7 @@ export const useChartStore = defineStore('chart', () => {
     })
 
     console.log('Result timing points:', timingPoints.value)
+    saveToHistory()
   }
 
   const addNote = (note: Note) => {
@@ -125,14 +166,17 @@ export const useChartStore = defineStore('chart', () => {
       if (a.beat !== b.beat) return a.beat - b.beat
       return a.lane - b.lane
     })
+    saveToHistory()
   }
 
   const removeNote = (index: number) => {
     notes.value.splice(index, 1)
+    saveToHistory()
   }
 
   const removeTimingPoint = (index: number) => {
     timingPoints.value.splice(index, 1)
+    saveToHistory()
   }
 
   // 指定した位置のタイミングポイントを取得
@@ -151,16 +195,65 @@ export const useChartStore = defineStore('chart', () => {
 
   const clearNotes = () => {
     notes.value = []
+    saveToHistory()
   }
 
   const loadChartData = (data: ChartData) => {
     songInfo.value = data.songInfo
     timingPoints.value = data.timingPoints
     notes.value = data.notes
+    saveToHistory()
   }
 
   const exportChartData = (): string => {
     return JSON.stringify(chartData.value, null, 2)
+  }
+
+  // アンドゥ機能
+  const undo = (): boolean => {
+    if (historyIndex.value > 0) {
+      historyIndex.value--
+      const prevState = history.value[historyIndex.value]
+      
+      // 状態を復元（履歴に保存しない）
+      songInfo.value = JSON.parse(JSON.stringify(prevState.songInfo))
+      timingPoints.value = JSON.parse(JSON.stringify(prevState.timingPoints))
+      notes.value = JSON.parse(JSON.stringify(prevState.notes))
+      
+      return true
+    }
+    return false
+  }
+
+  // リドゥ機能
+  const redo = (): boolean => {
+    if (historyIndex.value < history.value.length - 1) {
+      historyIndex.value++
+      const nextState = history.value[historyIndex.value]
+      
+      // 状態を復元（履歴に保存しない）
+      songInfo.value = JSON.parse(JSON.stringify(nextState.songInfo))
+      timingPoints.value = JSON.parse(JSON.stringify(nextState.timingPoints))
+      notes.value = JSON.parse(JSON.stringify(nextState.notes))
+      
+      return true
+    }
+    return false
+  }
+
+  // アンドゥ・リドゥ可否チェック
+  const canUndo = computed(() => historyIndex.value > 0)
+  const canRedo = computed(() => historyIndex.value < history.value.length - 1)
+
+  // 複数操作を1つの履歴として扱うためのヘルパー関数
+  const performBatchOperation = (operation: () => void) => {
+    skipHistorySaving.value = true
+    try {
+      operation()
+    } finally {
+      skipHistorySaving.value = false
+      saveToHistory()
+    }
   }
 
   return {
@@ -183,5 +276,12 @@ export const useChartStore = defineStore('chart', () => {
     clearNotes,
     loadChartData,
     exportChartData,
+    // アンドゥ・リドゥ
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    saveToHistory,
+    performBatchOperation,
   }
 })

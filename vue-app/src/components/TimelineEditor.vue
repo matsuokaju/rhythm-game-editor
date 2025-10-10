@@ -97,6 +97,19 @@
           <div>すべてのモード: Ctrl+V でペースト</div>
         </div>
       </div>
+
+      <!-- アンドゥ・リドゥ情報 -->
+      <div class="undo-redo-info">
+        <h3>アンドゥ・リドゥ</h3>
+        <div class="undo-redo-status">
+          <div class="undo-status" :class="{ disabled: !chartStore.canUndo }">
+            ↶ Ctrl+Z でアンドゥ {{ chartStore.canUndo ? '可能' : '不可' }}
+          </div>
+          <div class="redo-status" :class="{ disabled: !chartStore.canRedo }">
+            ↷ Ctrl+Y でリドゥ {{ chartStore.canRedo ? '可能' : '不可' }}
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="timeline-container" 
@@ -543,7 +556,7 @@ const selectedNotes = ref<Set<number>>(new Set()) // 選択されたノートの
 const lastSelectedNoteIndex = ref<number | null>(null) // 最後に選択されたノートのインデックス（範囲選択用）
 
 // ノートコピー・ペースト機能
-const copiedNotes = ref<Array<{ measure: number; beat: number; lane: number; type: 'tap' | 'hold' }>>([])
+const copiedNotes = ref<Array<{ measure: number; beat: number; lane: number; type: 'tap' | 'hold'; duration?: number }>>([])
 const copyBasePosition = ref<{ measure: number; beat: number } | null>(null)
 
 // グリッド間隔設定
@@ -1304,7 +1317,7 @@ const getActionModeDescription = () => {
   if (editType.value === 'notes') {
     switch (actionMode.value) {
       case 'select':
-        return 'ノートを選択します（Ctrl+クリック：複数選択、Shift+クリック：範囲選択、↑↓：時間移動、←→：レーン移動）'
+        return 'ノートを選択します（Ctrl+クリック：複数選択、Shift+クリック：範囲選択、↑↓：時間移動、←→：レーン移動、Ctrl+←→：左右反転）'
       case 'edit':
         return 'クリックでノートを配置します'
       case 'delete':
@@ -1583,7 +1596,8 @@ const copySelectedNotes = () => {
     measure: note.measure - earliestMeasure,
     beat: note.beat - earliestBeat,
     lane: note.lane,
-    type: note.type
+    type: note.type,
+    duration: note.duration
   }))
   
   copyBasePosition.value = { measure: earliestMeasure, beat: earliestBeat }
@@ -1597,35 +1611,31 @@ const pasteNotes = () => {
   if (!playbackPosition.value) return
   
   const basePos = playbackPosition.value
-  const pastedNotes: Array<{ measure: number; beat: number; lane: number; type: 'tap' | 'hold' }> = []
+  const pastedNotes: Array<{ measure: number; beat: number; lane: number; type: 'tap' | 'hold'; duration?: number }> = []
   
-  // 各コピーしたノートを現在の再生位置から相対位置に配置
-  copiedNotes.value.forEach(copiedNote => {
-    const newNote: { measure: number; beat: number; lane: number; type: 'tap' | 'hold' } = {
-      measure: basePos.measure + copiedNote.measure,
-      beat: basePos.beat + copiedNote.beat,
-      lane: copiedNote.lane,
-      type: copiedNote.type
-    }
-    
-    // 拍が小節を超える場合の調整
-    const timeSignature = chartStore.getTimeSignatureAt(newNote.measure, newNote.beat)
-    while (newNote.beat >= timeSignature[0]) {
-      newNote.beat -= timeSignature[0]
-      newNote.measure++
-    }
-    
-    // 同じ位置にノートがない場合のみ追加
-    const existingNote = chartStore.notes.find(note =>
-      note.measure === newNote.measure &&
-      note.beat === newNote.beat &&
-      note.lane === newNote.lane
-    )
-    
-    if (!existingNote) {
+  // 複数の操作を1つの履歴として扱う
+  chartStore.performBatchOperation(() => {
+    // 各コピーしたノートを現在の再生位置から相対位置に配置
+    copiedNotes.value.forEach(copiedNote => {
+      const newNote: { measure: number; beat: number; lane: number; type: 'tap' | 'hold'; duration?: number } = {
+        measure: basePos.measure + copiedNote.measure,
+        beat: basePos.beat + copiedNote.beat,
+        lane: copiedNote.lane,
+        type: copiedNote.type,
+        duration: copiedNote.duration
+      }
+      
+      // 拍が小節を超える場合の調整
+      const timeSignature = chartStore.getTimeSignatureAt(newNote.measure, newNote.beat)
+      while (newNote.beat >= timeSignature[0]) {
+        newNote.beat -= timeSignature[0]
+        newNote.measure++
+      }
+      
+      // 既存ノーツがあっても重ねて配置（重複として警告表示される）
       chartStore.addNote(newNote)
       pastedNotes.push(newNote)
-    }
+    })
   })
   
   // ペーストしたノーツを全て選択状態にする
@@ -1975,7 +1985,31 @@ const handleKeyDown = (event: KeyboardEvent) => {
     return
   }
   
-  // 選択されたノートがない場合、矢印キーとデリートキー、コピー・ペースト以外は何もしない
+  // Ctrl+Z でアンドゥ
+  if (event.ctrlKey && event.key === 'z') {
+    event.preventDefault()
+    if (chartStore.undo()) {
+      // アンドゥ成功時は選択状態をクリア
+      selectedNotes.value.clear()
+      lastSelectedNoteIndex.value = null
+      console.log('Undo performed')
+    }
+    return
+  }
+  
+  // Ctrl+Y でリドゥ
+  if (event.ctrlKey && event.key === 'y') {
+    event.preventDefault()
+    if (chartStore.redo()) {
+      // リドゥ成功時は選択状態をクリア
+      selectedNotes.value.clear()
+      lastSelectedNoteIndex.value = null
+      console.log('Redo performed')
+    }
+    return
+  }
+  
+  // 選択されたノートがない場合、矢印キーとデリートキー、コピー・ペースト、アンドゥ・リドゥ以外は何もしない
   if (selectedNotes.value.size === 0 && !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Delete', 'Backspace'].includes(event.key)) return
   
   if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -2061,6 +2095,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
         selectedNotes.value.add(newIndex)
       }
     })
+    
+    // 履歴に保存
+    chartStore.saveToHistory()
   }
   
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
@@ -2069,37 +2106,43 @@ const handleKeyDown = (event: KeyboardEvent) => {
     
     event.preventDefault()
     
-    // 左矢印は-1、右矢印は+1
-    const laneDirection = event.key === 'ArrowLeft' ? -1 : 1
-    
-    // 選択されたノートを移動
+    // 選択されたノートを取得
     const notesToMove = Array.from(selectedNotes.value).map(index => chartStore.notes[index])
     
-    notesToMove.forEach((note) => {
-      if (note) {
-        let newLane = note.lane + laneDirection
-        
-        // 循環移動の処理（0-5の範囲で循環）
-        if (newLane < 0) {
-          newLane = 5 // 左端から右端へ
-        } else if (newLane > 5) {
-          newLane = 0 // 右端から左端へ
-        }
-        
-        // 移動先に同じ種類のノートがないかチェック
-        const existingNote = chartStore.notes.find(existingNote =>
-          existingNote !== note &&
-          existingNote.measure === note.measure &&
-          existingNote.beat === note.beat &&
-          existingNote.lane === newLane
-        )
-        
-        // 移動先にノートがない場合のみ移動
-        if (!existingNote) {
+    if (event.ctrlKey || event.metaKey) {
+      // Ctrl+左右キー: 左右反転
+      chartStore.performBatchOperation(() => {
+        notesToMove.forEach((note) => {
+          if (note) {
+            // レーン位置を左右反転（0↔5, 1↔4, 2↔3）
+            note.lane = 5 - note.lane
+          }
+        })
+      })
+    } else {
+      // 通常の左右キー: 1レーンずつ移動
+      // 左矢印は-1、右矢印は+1
+      const laneDirection = event.key === 'ArrowLeft' ? -1 : 1
+      
+      notesToMove.forEach((note) => {
+        if (note) {
+          let newLane = note.lane + laneDirection
+          
+          // 循環移動の処理（0-5の範囲で循環）
+          if (newLane < 0) {
+            newLane = 5 // 左端から右端へ
+          } else if (newLane > 5) {
+            newLane = 0 // 右端から左端へ
+          }
+          
+          // 移動先にノートがあっても重ねて移動
           note.lane = newLane
         }
-      }
-    })
+      })
+      
+      // 履歴に保存
+      chartStore.saveToHistory()
+    }
     
     // ノートの順序を正しく保つためにソート
     chartStore.notes.sort((a, b) => {
@@ -3669,5 +3712,34 @@ onUnmounted(() => {
     min-width: auto;
     margin-bottom: 4px;
   }
+}
+
+/* アンドゥ・リドゥ情報 */
+.undo-redo-info {
+  margin-bottom: 20px;
+  padding: 15px;
+  background: #1e1e1e;
+  border-radius: 8px;
+  border: 1px solid #444;
+}
+
+.undo-redo-status {
+  font-size: 12px;
+}
+
+.undo-status, .redo-status {
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  background: #2a2a2a;
+  border-left: 3px solid #4caf50;
+  color: #4caf50;
+  font-weight: 500;
+}
+
+.undo-status.disabled, .redo-status.disabled {
+  border-left-color: #666;
+  color: #666;
+  background: #1a1a1a;
 }
 </style>
