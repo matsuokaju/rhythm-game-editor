@@ -313,6 +313,16 @@
             class="volume-slider"
           />
         </div>
+        <div v-if="audioElement" class="se-controls">
+          <label class="se-toggle-label">
+            <input 
+              type="checkbox" 
+              v-model="seEnabled"
+              class="se-toggle-checkbox"
+            />
+            <span class="se-toggle-text">ノーツ効果音</span>
+          </label>
+        </div>
       </div>
       
       <!-- 情報 -->
@@ -544,6 +554,7 @@ const playbackStartPosition = ref({ measure: 1, beat: 0 }) // 再生開始時の
 // SE関連
 const tickSoundElement = ref<HTMLAudioElement | null>(null)
 const playedNotes = ref<Set<string>>(new Set()) // 再生済みノートを追跡
+const seEnabled = ref(true) // SE（効果音）のオンオフ
 
 
 
@@ -1118,7 +1129,7 @@ const getNoteKey = (measure: number, beat: number, lane: number) => {
 
 // ノートヒット検出とSE再生
 const checkAndPlayNoteSE = (currentPos: { measure: number; beat: number }) => {
-  if (!tickSoundElement.value) return
+  if (!tickSoundElement.value || !seEnabled.value) return
 
   // 現在位置付近のノートを検索（±0.05拍の範囲）
   const tolerance = 0.05
@@ -3129,6 +3140,52 @@ onUnmounted(() => {
   background: #555;
   border-radius: 2px;
   border: none;
+}
+
+/* SEトグル */
+.se-controls {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.se-toggle-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 13px;
+  color: #ccc;
+  gap: 8px;
+}
+
+.se-toggle-checkbox {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #555;
+  border-radius: 3px;
+  background: #2a2a2a;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.se-toggle-checkbox:checked {
+  background: #4caf50;
+  border-color: #4caf50;
+}
+
+.se-toggle-checkbox:checked::before {
+  content: '✓';
+  position: absolute;
+  top: -2px;
+  left: 1px;
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.se-toggle-text {
+  user-select: none;
 }
 
 /* タイミングコントロール */
