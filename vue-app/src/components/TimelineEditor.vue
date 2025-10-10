@@ -11,7 +11,7 @@
           <input 
             type="range" 
             min="50" 
-            max="200" 
+            max="300" 
             step="10" 
             :value="Math.round(zoom * 100)" 
             @input="handleZoomChange"
@@ -19,7 +19,7 @@
           />
           <div class="zoom-labels">
             <span>50%</span>
-            <span>200%</span>
+            <span>300%</span>
           </div>
         </div>
       </div>
@@ -507,7 +507,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useChartStore, type Note, type SongInfo } from '../stores/chart'
 
 const chartStore = useChartStore()
@@ -554,7 +554,38 @@ const playbackStartPosition = ref({ measure: 1, beat: 0 }) // 再生開始時の
 // SE関連
 const tickSoundElement = ref<HTMLAudioElement | null>(null)
 const playedNotes = ref<Set<string>>(new Set()) // 再生済みノートを追跡
-const seEnabled = ref(true) // SE（効果音）のオンオフ
+const seEnabled = ref(false) // SE（効果音）のオンオフ
+
+// パフォーマンス最適化用変数
+let lastScrollUpdate = 0
+const SCROLL_UPDATE_INTERVAL = 16 // 60FPS制限 (1000ms / 60fps ≈ 16ms)
+let animationFrameId: number | null = null
+
+// 譜面の保存状態追跡
+const hasUnsavedChanges = ref(false) // 未保存の変更があるかどうか
+const lastExportTime = ref<number | null>(null) // 最後にエクスポートした時刻
+
+// 譜面データの変更を監視
+watch(
+  () => [chartStore.notes, chartStore.timingPoints, chartStore.songInfo],
+  () => {
+    // 最初の読み込み時（lastExportTimeがnull）は変更フラグを立てない
+    if (lastExportTime.value !== null) {
+      hasUnsavedChanges.value = true
+    }
+  },
+  { deep: true }
+)
+
+// ページ離脱時のアラート処理
+const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+  if (hasUnsavedChanges.value) {
+    // 標準的なメッセージを設定
+    event.preventDefault()
+    event.returnValue = '譜面に未保存の変更があります。ページを離れますか？'
+    return '譜面に未保存の変更があります。ページを離れますか？'
+  }
+}
 
 
 
@@ -993,12 +1024,23 @@ const handleVolumeChange = (event: Event) => {
   }
 }
 
-// より頻繁な位置更新のためのrequestAnimationFrameループ
+// 最適化されたアニメーションフレームループ（重複実行防止）
 const startSmoothUpdate = () => {
-  if (isPlaying.value) {
-    updatePlaybackPosition()
-    requestAnimationFrame(startSmoothUpdate)
+  // 既存のアニメーションフレームをキャンセル
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId)
   }
+  
+  const update = () => {
+    if (isPlaying.value) {
+      updatePlaybackPosition()
+      animationFrameId = requestAnimationFrame(update)
+    } else {
+      animationFrameId = null
+    }
+  }
+  
+  animationFrameId = requestAnimationFrame(update)
 }
 
 // 音声再生/一時停止
@@ -1063,6 +1105,13 @@ const stopAudio = () => {
   if (!audioElement.value) return
   
   console.log('Stopping audio - resetting played notes')
+  
+  // アニメーションフレームをキャンセル（重要：メモリリーク防止）
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId)
+    animationFrameId = null
+  }
+  
   audioElement.value.pause()
   // 停止時は楽譜の開始位置（1小節0拍）に対応する音声位置にセット
   audioElement.value.currentTime = Math.max(0, -chartStore.songInfo.audioOffset)
@@ -1127,7 +1176,46 @@ const getNoteKey = (measure: number, beat: number, lane: number) => {
   return `${measure}-${beat.toFixed(3)}-${lane}`
 }
 
-// ノートヒット検出とSE再生
+// SE処理を最適化（現在小節±0.5小節のみチェック）
+const checkAndPlayNoteSEOptimized = (currentPos: { measure: number; beat: number }) => {
+  if (!tickSoundElement.value || !seEnabled.value) return
+
+  const tolerance = 0.05
+  
+  // 検索範囲を現在の小節±0.5小節に限定してパフォーマンス向上
+  const searchRange = 0.5
+  const startMeasure = Math.max(1, Math.floor(currentPos.measure - searchRange))
+  const endMeasure = Math.ceil(currentPos.measure + searchRange)
+  
+  // 該当する小節のノートのみをチェック
+  for (let measure = startMeasure; measure <= endMeasure; measure++) {
+    const measureNotes = chartStore.notes.filter(note => note.measure === measure)
+    
+    measureNotes.forEach(note => {
+      const beatDiff = Math.abs(currentPos.beat - note.beat)
+      const measureMatch = currentPos.measure === note.measure
+      
+      if (measureMatch && beatDiff <= tolerance) {
+        const noteKey = getNoteKey(note.measure, note.beat, note.lane)
+        
+        if (!playedNotes.value.has(noteKey)) {
+          playedNotes.value.add(noteKey)
+          
+          // SE再生を非同期で実行（メインスレッドをブロックしない）
+          setTimeout(() => {
+            if (tickSoundElement.value) {
+              const tickSound = tickSoundElement.value.cloneNode() as HTMLAudioElement
+              tickSound.volume = 0.3
+              tickSound.play().catch(() => {}) // エラーは無視してパフォーマンス優先
+            }
+          }, 0)
+        }
+      }
+    })
+  }
+}
+
+// 元の関数も保持（他の箇所で使用される可能性のため）
 const checkAndPlayNoteSE = (currentPos: { measure: number; beat: number }) => {
   if (!tickSoundElement.value || !seEnabled.value) return
 
@@ -1146,7 +1234,6 @@ const checkAndPlayNoteSE = (currentPos: { measure: number; beat: number }) => {
       // まだ再生していないノートの場合のみSEを再生
       if (!playedNotes.value.has(noteKey)) {
         playedNotes.value.add(noteKey)
-        console.log(`Playing SE for note: ${noteKey} at position ${currentPos.measure}-${currentPos.beat.toFixed(3)}`)
         
         // SEを再生（複数同時再生対応）
         if (tickSoundElement.value) {
@@ -1156,8 +1243,6 @@ const checkAndPlayNoteSE = (currentPos: { measure: number; beat: number }) => {
             console.warn('SE再生エラー:', error)
           })
         }
-      } else {
-        console.log(`Skipping already played note: ${noteKey}`)
       }
     }
   })
@@ -1192,23 +1277,26 @@ const updatePlaybackPosition = () => {
     beat: position.beat
   }
   
-  // 現在の再生位置を更新（黄色い線用、毎フレーム更新）
+  // 現在の再生位置を更新（最適化版）
   const oldCurrentPosition = currentPlaybackPosition.value
   if (!oldCurrentPosition || 
       Math.abs(newPosition.measure - oldCurrentPosition.measure) > 0 ||
-      Math.abs(newPosition.beat - oldCurrentPosition.beat) > 0.01) { // 閾値を0.1から0.01に縮小
+      Math.abs(newPosition.beat - oldCurrentPosition.beat) > 0.05) { // 閾値を0.01から0.05に拡大してCPU負荷削減
     
     // 現在の再生位置のみ更新（黄色い線用）
-    // playbackPosition（赤い線）は再生開始位置として固定
     currentPlaybackPosition.value = { ...newPosition }
     
-    // ノートヒット検出とSE再生
-    checkAndPlayNoteSE(newPosition)
+    // SE処理を最適化版に変更
+    checkAndPlayNoteSEOptimized(newPosition)
     
-    // 毎フレーム滑らかにスクロール更新
-    requestAnimationFrame(() => {
-      scrollToPlaybackPositionSmooth()
-    })
+    // スクロール更新を制限（60FPS制限）
+    const now = Date.now()
+    if (now - lastScrollUpdate > SCROLL_UPDATE_INTERVAL) {
+      lastScrollUpdate = now
+      requestAnimationFrame(() => {
+        scrollToPlaybackPositionSmoothOptimized()
+      })
+    }
   }
 }
 
@@ -1264,6 +1352,30 @@ const getPositionFromScoreTime = (targetTime: number) => {
 }
 
 // 再生位置への完全滑らかスクロール（黄色い線を追尾）
+// 最適化されたスクロール関数（CPU負荷削減）
+const scrollToPlaybackPositionSmoothOptimized = () => {
+  if (!timelineContainer.value || !currentPlaybackPosition.value) return
+  
+  const lineY = getPlaybackLineY(currentPlaybackPosition.value.measure, currentPlaybackPosition.value.beat)
+  const containerHeight = timelineContainer.value.clientHeight
+  
+  const targetScroll = lineY - containerHeight / 2
+  const clampedTarget = Math.max(0, Math.min(targetScroll, totalHeight.value - containerHeight))
+  
+  const currentScroll = timelineContainer.value.scrollTop
+  const scrollDiff = Math.abs(clampedTarget - currentScroll)
+  
+  // 差が小さい場合は更新しない（CPU負荷削減）
+  if (scrollDiff < 5) return
+  
+  // 大きな差がある場合のみスムーズスクロール
+  const interpolationFactor = scrollDiff > 100 ? 0.2 : 0.1 // 大きな差では速く移動
+  const newScrollPosition = currentScroll + (clampedTarget - currentScroll) * interpolationFactor
+  
+  timelineContainer.value.scrollTop = newScrollPosition
+}
+
+// 元の関数も保持（他の箇所で使用される可能性のため）
 const scrollToPlaybackPositionSmooth = () => {
   if (!timelineContainer.value || !currentPlaybackPosition.value) return
   
@@ -2257,6 +2369,10 @@ const importChartData = (event: Event) => {
         }
         
         console.log('Chart data imported successfully')
+        
+        // インポート完了時に保存状態をリセット（新しいファイルとして扱う）
+        hasUnsavedChanges.value = false
+        lastExportTime.value = Date.now()
       } catch (error) {
         console.error('譜面データの読み込みに失敗しました:', error)
         alert('譜面データの読み込みに失敗しました。ファイル形式を確認してください。')
@@ -2296,6 +2412,10 @@ const exportChartData = () => {
     URL.revokeObjectURL(url)
     
     console.log('Chart data exported successfully as:', fileName)
+    
+    // エクスポート完了時に保存状態をリセット
+    hasUnsavedChanges.value = false
+    lastExportTime.value = Date.now()
   } catch (error) {
     console.error('譜面データの書き出しに失敗しました:', error)
     alert('譜面データの書き出しに失敗しました。')
@@ -2392,6 +2512,10 @@ const handleDialogAudioFileChange = (event: Event) => {
 }
 
 onMounted(() => {
+  // 初期化時に保存状態をクリア状態に設定
+  hasUnsavedChanges.value = false
+  lastExportTime.value = Date.now()
+  
   if (timelineContainer.value) {
     timelineContainer.value.addEventListener('scroll', handleScroll)
     // 初期位置を最下部（小節1が見える位置）に設定
@@ -2411,6 +2535,9 @@ onMounted(() => {
   
   // グローバルクリックリスナーを追加（選択解除用）
   document.addEventListener('click', handleGlobalClick)
+  
+  // ページ離脱時のアラート機能を追加
+  window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
 onUnmounted(() => {
@@ -2422,6 +2549,9 @@ onUnmounted(() => {
   
   // グローバルクリックリスナーを削除
   document.removeEventListener('click', handleGlobalClick)
+  
+  // ページ離脱時のイベントリスナーを削除
+  window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 </script>
 
