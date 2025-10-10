@@ -80,6 +80,23 @@
         </div>
         <div class="division-info">{{ getDivisionDescription() }}</div>
       </div>
+
+      <!-- コピー・ペースト情報 -->
+      <div class="copy-paste-info" v-if="editType === 'notes'">
+        <h3>コピー・ペースト</h3>
+        <div class="copy-info">
+          <div v-if="copiedNotes.length > 0" class="copied-status">
+            📋 {{ copiedNotes.length }}個のノートをコピー中
+          </div>
+          <div v-else class="no-copy">
+            コピーされたノートなし
+          </div>
+        </div>
+        <div class="copy-instructions">
+          <div>選択モード: Ctrl+C でコピー</div>
+          <div>すべてのモード: Ctrl+V でペースト</div>
+        </div>
+      </div>
     </div>
 
     <div class="timeline-container" 
@@ -87,7 +104,8 @@
          @mousedown="handleMouseDown"
          @mousemove="handleMouseMove"
          @mouseup="handleMouseUp"
-         @mouseleave="handleMouseUp">
+         @mouseleave="handleMouseUp"
+         @contextmenu="handleTimelineContextMenu">
       <div class="timeline-grid" :style="{ height: `${totalHeight}px` }">
         <!-- レーン背景 -->
         <div
@@ -522,6 +540,11 @@ const actionMode = ref<'select' | 'edit' | 'delete'>('select')
 
 // ノート選択機能
 const selectedNotes = ref<Set<number>>(new Set()) // 選択されたノートのインデックス
+const lastSelectedNoteIndex = ref<number | null>(null) // 最後に選択されたノートのインデックス（範囲選択用）
+
+// ノートコピー・ペースト機能
+const copiedNotes = ref<Array<{ measure: number; beat: number; lane: number; type: 'tap' | 'hold' }>>([])
+const copyBasePosition = ref<{ measure: number; beat: number } | null>(null)
 
 // グリッド間隔設定
 const gridDivision = ref(16) // デフォルトは16分音符（0.25拍間隔）
@@ -1281,7 +1304,7 @@ const getActionModeDescription = () => {
   if (editType.value === 'notes') {
     switch (actionMode.value) {
       case 'select':
-        return 'ノートを選択します'
+        return 'ノートを選択します（Ctrl+クリック：複数選択、Shift+クリック：範囲選択、↑↓：時間移動、←→：レーン移動）'
       case 'edit':
         return 'クリックでノートを配置します'
       case 'delete':
@@ -1441,19 +1464,32 @@ const handleNoteClick = (event: MouseEvent, index: number) => {
     )
     
     if (actualIndex !== -1) {
-      // Ctrlキーが押されている場合は複数選択
-      if (event.ctrlKey || event.metaKey) {
+      if (event.shiftKey && lastSelectedNoteIndex.value !== null) {
+        // Shift+クリック: 範囲選択
+        selectNoteRange(lastSelectedNoteIndex.value, actualIndex)
+        lastSelectedNoteIndex.value = actualIndex
+      } else if (event.ctrlKey || event.metaKey) {
+        // Ctrl+クリック: 複数選択
         if (selectedNotes.value.has(actualIndex)) {
           selectedNotes.value.delete(actualIndex)
+          // 削除した場合は最後の選択インデックスを更新
+          if (selectedNotes.value.size > 0) {
+            lastSelectedNoteIndex.value = Math.max(...Array.from(selectedNotes.value))
+          } else {
+            lastSelectedNoteIndex.value = null
+          }
         } else {
           selectedNotes.value.add(actualIndex)
+          lastSelectedNoteIndex.value = actualIndex
         }
       } else {
         // 単一選択
         selectedNotes.value.clear()
         selectedNotes.value.add(actualIndex)
+        lastSelectedNoteIndex.value = actualIndex
       }
       console.log('Selected notes:', Array.from(selectedNotes.value))
+      console.log('Last selected note index:', lastSelectedNoteIndex.value)
     }
   } else if (actionMode.value === 'delete') {
     // ノート削除
@@ -1469,6 +1505,7 @@ const handleNoteClick = (event: MouseEvent, index: number) => {
       chartStore.removeNote(actualIndex)
       // 削除時は選択状態を完全にクリア
       selectedNotes.value.clear()
+      lastSelectedNoteIndex.value = null
       console.log('Note deleted in delete mode, cleared all selections')
     }
   }
@@ -1494,9 +1531,129 @@ const handleNoteRightClick = (event: MouseEvent, index: number) => {
     chartStore.removeNote(actualIndex)
     // 右クリック削除時は選択状態を完全にクリア
     selectedNotes.value.clear()
+    lastSelectedNoteIndex.value = null
     console.log('Note deleted by right-click:', noteToDelete)
     console.log('Cleared all note selections')
   }
+}
+
+// タイムライン右クリック処理（コンテキストメニューを無効化）
+const handleTimelineContextMenu = (event: MouseEvent) => {
+  // タイムライン上では右クリックメニューを表示しない
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+// 範囲選択ヘルパー関数
+const selectNoteRange = (fromIndex: number, toIndex: number) => {
+  const minIndex = Math.min(fromIndex, toIndex)
+  const maxIndex = Math.max(fromIndex, toIndex)
+  
+  // 指定された範囲のノートをすべて選択
+  for (let i = minIndex; i <= maxIndex; i++) {
+    selectedNotes.value.add(i)
+  }
+}
+
+// ノートコピー機能
+const copySelectedNotes = () => {
+  if (selectedNotes.value.size === 0) return
+  
+  // 選択されたノートのデータを取得
+  const selectedNoteData = Array.from(selectedNotes.value)
+    .map(index => chartStore.notes[index])
+    .filter(note => note) // undefined チェック
+  
+  if (selectedNoteData.length === 0) return
+  
+  // コピーのベース位置（最も早い位置）を計算
+  let earliestMeasure = selectedNoteData[0].measure
+  let earliestBeat = selectedNoteData[0].beat
+  
+  selectedNoteData.forEach(note => {
+    if (note.measure < earliestMeasure || 
+        (note.measure === earliestMeasure && note.beat < earliestBeat)) {
+      earliestMeasure = note.measure
+      earliestBeat = note.beat
+    }
+  })
+  
+  // ベース位置からの相対位置でノートデータを保存
+  copiedNotes.value = selectedNoteData.map(note => ({
+    measure: note.measure - earliestMeasure,
+    beat: note.beat - earliestBeat,
+    lane: note.lane,
+    type: note.type
+  }))
+  
+  copyBasePosition.value = { measure: earliestMeasure, beat: earliestBeat }
+  
+  console.log(`Copied ${copiedNotes.value.length} notes`)
+}
+
+// ノートペースト機能
+const pasteNotes = () => {
+  if (copiedNotes.value.length === 0) return
+  if (!playbackPosition.value) return
+  
+  const basePos = playbackPosition.value
+  const pastedNotes: Array<{ measure: number; beat: number; lane: number; type: 'tap' | 'hold' }> = []
+  
+  // 各コピーしたノートを現在の再生位置から相対位置に配置
+  copiedNotes.value.forEach(copiedNote => {
+    const newNote: { measure: number; beat: number; lane: number; type: 'tap' | 'hold' } = {
+      measure: basePos.measure + copiedNote.measure,
+      beat: basePos.beat + copiedNote.beat,
+      lane: copiedNote.lane,
+      type: copiedNote.type
+    }
+    
+    // 拍が小節を超える場合の調整
+    const timeSignature = chartStore.getTimeSignatureAt(newNote.measure, newNote.beat)
+    while (newNote.beat >= timeSignature[0]) {
+      newNote.beat -= timeSignature[0]
+      newNote.measure++
+    }
+    
+    // 同じ位置にノートがない場合のみ追加
+    const existingNote = chartStore.notes.find(note =>
+      note.measure === newNote.measure &&
+      note.beat === newNote.beat &&
+      note.lane === newNote.lane
+    )
+    
+    if (!existingNote) {
+      chartStore.addNote(newNote)
+      pastedNotes.push(newNote)
+    }
+  })
+  
+  // ペーストしたノーツを全て選択状態にする
+  selectedNotes.value.clear()
+  let maxPastedIndex = -1
+  pastedNotes.forEach(pastedNote => {
+    const noteIndex = chartStore.notes.findIndex(note =>
+      note.measure === pastedNote.measure &&
+      note.beat === pastedNote.beat &&
+      note.lane === pastedNote.lane &&
+      note.type === pastedNote.type
+    )
+    if (noteIndex !== -1) {
+      selectedNotes.value.add(noteIndex)
+      maxPastedIndex = Math.max(maxPastedIndex, noteIndex)
+    }
+  })
+  
+  // 最後に選択されたインデックスを更新
+  lastSelectedNoteIndex.value = maxPastedIndex >= 0 ? maxPastedIndex : null
+  
+  // 操作モードを選択モードに自動切り替え
+  if (pastedNotes.length > 0) {
+    setActionMode('select')
+  }
+  
+  console.log(`Pasted ${pastedNotes.length} notes at measure ${basePos.measure}, beat ${basePos.beat}`)
+  console.log('Selected pasted notes:', Array.from(selectedNotes.value))
 }
 
 // 削除されたモード管理（新しいeditType/actionModeシステムに置き換え）
@@ -1804,8 +1961,22 @@ const handleKeyDown = (event: KeyboardEvent) => {
     return
   }
   
-  // 選択されたノートがない場合、矢印キーとデリートキー以外は何もしない
-  if (selectedNotes.value.size === 0 && !['ArrowUp', 'ArrowDown', 'Delete', 'Backspace'].includes(event.key)) return
+  // Ctrl+C でコピー
+  if (event.ctrlKey && event.key === 'c' && editType.value === 'notes' && actionMode.value === 'select') {
+    event.preventDefault()
+    copySelectedNotes()
+    return
+  }
+  
+  // Ctrl+V でペースト（操作モードに関係なく動作）
+  if (event.ctrlKey && event.key === 'v' && editType.value === 'notes') {
+    event.preventDefault()
+    pasteNotes()
+    return
+  }
+  
+  // 選択されたノートがない場合、矢印キーとデリートキー、コピー・ペースト以外は何もしない
+  if (selectedNotes.value.size === 0 && !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Delete', 'Backspace'].includes(event.key)) return
   
   if (event.key === 'Delete' || event.key === 'Backspace') {
     // 選択されたノートがない場合は何もしない
@@ -1821,6 +1992,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
     
     // 選択状態をクリア
     selectedNotes.value.clear()
+    lastSelectedNoteIndex.value = null
     return
   }
   
@@ -1871,6 +2043,61 @@ const handleKeyDown = (event: KeyboardEvent) => {
         
         // 必要に応じて総小節数を自動拡張
         autoExpandMeasures(newMeasure)
+      }
+    })
+    
+    // ノートの順序を正しく保つためにソート
+    chartStore.notes.sort((a, b) => {
+      if (a.measure !== b.measure) return a.measure - b.measure
+      if (a.beat !== b.beat) return a.beat - b.beat
+      return a.lane - b.lane
+    })
+    
+    // 移動後のノートを再選択（移動したノートを直接参照で選択）
+    selectedNotes.value.clear()
+    notesToMove.forEach(movedNote => {
+      const newIndex = chartStore.notes.findIndex(note => note === movedNote)
+      if (newIndex !== -1) {
+        selectedNotes.value.add(newIndex)
+      }
+    })
+  }
+  
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    // 選択されたノートがない場合は何もしない
+    if (selectedNotes.value.size === 0) return
+    
+    event.preventDefault()
+    
+    // 左矢印は-1、右矢印は+1
+    const laneDirection = event.key === 'ArrowLeft' ? -1 : 1
+    
+    // 選択されたノートを移動
+    const notesToMove = Array.from(selectedNotes.value).map(index => chartStore.notes[index])
+    
+    notesToMove.forEach((note) => {
+      if (note) {
+        let newLane = note.lane + laneDirection
+        
+        // 循環移動の処理（0-5の範囲で循環）
+        if (newLane < 0) {
+          newLane = 5 // 左端から右端へ
+        } else if (newLane > 5) {
+          newLane = 0 // 右端から左端へ
+        }
+        
+        // 移動先に同じ種類のノートがないかチェック
+        const existingNote = chartStore.notes.find(existingNote =>
+          existingNote !== note &&
+          existingNote.measure === note.measure &&
+          existingNote.beat === note.beat &&
+          existingNote.lane === newLane
+        )
+        
+        // 移動先にノートがない場合のみ移動
+        if (!existingNote) {
+          note.lane = newLane
+        }
       }
     })
     
@@ -2570,6 +2797,48 @@ onUnmounted(() => {
   color: #aaa;
   border-left: 3px solid #9c27b0;
   text-align: center;
+}
+
+/* コピー・ペースト情報 */
+.copy-paste-info {
+  margin-bottom: 20px;
+  padding: 15px;
+  background: #1e1e1e;
+  border-radius: 8px;
+  border: 1px solid #444;
+}
+
+.copy-info {
+  margin-bottom: 10px;
+}
+
+.copied-status {
+  background: #1a1a1a;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #4caf50;
+  border-left: 3px solid #4caf50;
+  font-weight: 500;
+}
+
+.no-copy {
+  background: #1a1a1a;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #777;
+  border-left: 3px solid #555;
+  text-align: center;
+}
+
+.copy-instructions {
+  font-size: 11px;
+  color: #999;
+}
+
+.copy-instructions div {
+  margin-bottom: 2px;
 }
 
 /* 楽曲設定 */
